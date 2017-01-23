@@ -1,0 +1,31 @@
+delet|deficient
+conditional
+modif
+mutant|mutat
+wild.?type|wt
+(in)?activation|activator.*|inhibit|deactivat
+siRNA|shRNA|knock|KO|KD|flox|null|knockout|knockdown|RNAi|RNA interfer
+cre
+\+\/\+|\+\/\-|\-\/\-|\-\/\+
+perturb|disrupt
+stimulat|over.?expression|low.?expression|high.?expression|overexpressed|over.?expressing
+transgen
+\sday|\dd|d\d
+hour|hr
+week|wk
+infect
+virus
+control
+normal
+inoculat|incubat
+treated|treatment
+treat
+suppress|silence|repress
+target
+recombinant
+response
+expose
+treated with|treat with
+transduc
+induction|induced|induces
+induc
