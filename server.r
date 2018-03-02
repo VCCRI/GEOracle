@@ -8,7 +8,7 @@ this.dir <- dirname(rstudioapi::getActiveDocumentContext()$path)
 #this.dir <- "/home/rstudio/ShinyApps/GEOracle_AWS"
 setwd(this.dir)
 
-list.of.cran.packages <- c("cluster", "plyr", "e1071", "rockchalk", "RCurl", "shiny", "DT", "memisc", "igraph", "shinyBS","RSQLite","shinyjs")
+list.of.cran.packages <- c("cluster", "plyr", "e1071", "rockchalk", "RCurl", "shiny", "DT", "memisc", "igraph", "shinyBS","RSQLite","shinyjs","httr")
 new.cran.packages <- list.of.cran.packages[!(list.of.cran.packages %in% installed.packages()[,"Package"])]
 if(length(new.cran.packages)) install.packages(new.cran.packages, dependencies = TRUE)
 
@@ -31,6 +31,7 @@ require(GEOquery)
 require(biomaRt)
 require(RSQLite)
 require(RMySQL)
+require(httr)
 
 require(GEOmetadb)
 require(shiny)
@@ -50,13 +51,10 @@ load("GSEClassifierData/newFeatsToKeep.RData")
 load("GSEClassifierData/PertModel.RData")
 
 
-
 ################################################################################################################################################
 # GEOmetaDB functions
 ################################################################################################################################################
 
-
-#https://fromdual.com/migration-of-sqlite-to-mysql
 
 # This function downloads and loads the metadata
 loadMetadata <- function(default=TRUE){
@@ -83,6 +81,8 @@ grabAllMetadataGSE <- function(GSEid) {
   # Get the GSM metadata
   GSMMeta <- lapply(GSEtoGSM, grabAllMetadataGSM)
   # Add the GSM metadata to the GSE metadata
+  if(length(unlist(GSMMeta)) == 0){return(NA)}
+  
   GSEMeta$GSMMeta <- GSMMeta
   # Return the GSE metadata list
   return(GSEMeta)
@@ -125,7 +125,7 @@ grabMultipleGSM <- function (gsmids){
 get.title.table <- function(GSM){
   title <- GSM$title
   o.title <- title
-  if(!grepl("[wt|ko](_)?\\d*?$",title, ignore.case = T) & !grepl("((\\s|\\_|\\-)[0-9]{1,2}(e|h|w|d|p|(pd)|(day)|(week)|(ed)|(hr)|(hour))$)|((\\s\\_\\-)(e|h|w|d|p|(pd)|(day)|(week)|(ed)|(hr)|(hour))[0-9]{1,2}$)", title, ignore.case = T)){ 
+  if(!grepl("(wt)|(ko)(_)?\\d*?$",title, ignore.case = T) & !grepl("((\\s|\\_|\\-)[0-9]{1,2}(e|h|w|d|p|(pd)|(day)|(week)|(ed)|(hr)|(hour))$)|((\\s\\_\\-)(e|h|w|d|p|(pd)|(day)|(week)|(ed)|(hr)|(hour))[0-9]{1,2}$)", title, ignore.case = T)){ 
     title <- unlist(strsplit(gsub("[!a-z!0-9!A-Z][0-9a-zA-Z]{,2}$","",title), "\\,|\\_"))
   }
   if(identical(title, character(0))){ title <- o.title}
@@ -137,6 +137,7 @@ get.title.table <- function(GSM){
 get.characteristics.table <- function(GSM){
   characteristics <- unlist(strsplit(GSM$characteristics_ch1, ";\t|\\, "))
   characteristics.split <- do.call(rbind, lapply(characteristics, function(X){return(unlist(strsplit(X, ":\\s?")))}))
+  
   if(as.numeric(ncol(characteristics.split)) > 1) {
     characteristics.table <- as.data.frame(t(characteristics.split[,2]))
     colnames(characteristics.table) <- characteristics.split[,1]
@@ -157,12 +158,32 @@ get.combined.table <- function(GSM) {
   return(combined.table)
 }
 
+###########################################################
+###########################################################
+
+
+get.source <- function(GSM) {
+  source <- GSM$source_name_ch1
+  return(source)
+}
+
+
+## takes in GSM metadata
+get.combined.table2 <- function(GSM) {
+  characteristicsTable <- get.characteristics.table(GSM)
+  titleTable <- get.title.table(GSM)
+  souceInfo <- get.source(GSM)
+  combined.table <- cbind(t(titleTable),characteristicsTable,souceInfo)
+  return(combined.table)
+}
 
 get.min.diss <- function(Table){
+  
   Table <- data.matrix(Table)
   Table[is.na(Table)] <- "a"
   Table <- data.frame(Table)
   diss.mat <- data.matrix(daisy(Table))
+  
   min.dis <- lapply(1:nrow(diss.mat), function(X){
     return(unlist(which(diss.mat[X,] == min(diss.mat[X,]))))
   })
@@ -171,6 +192,7 @@ get.min.diss <- function(Table){
 
 TitleClustering <- function(gseMetadata) {
   
+  print(paste0("Clustering ", gseMetadata$gse))
   TitleTable <- data.frame(do.call(rbind, lapply(gseMetadata$GSMMeta, get.title.table)))
   
   GSMtitles <- unlist(lapply(gseMetadata$GSMMeta, function(X){return(X$title)}))
@@ -462,7 +484,7 @@ reverse.label <- function(oldLabel) {
   return(newLabel)
 }
 
-FixLabels <- function(GSEclusters, predictions){
+FixLabels <- function(GSEclusters, predictions, analysis_type = "All experiments"){
   
   
   GSEClassInfo <- data.frame(predLabel = predictions, probs = attr(predictions, "probabilities"), row.names = lapply(lapply(GSEclusters, names), paste, collapse=" "))
@@ -518,8 +540,18 @@ FixLabels <- function(GSEclusters, predictions){
         }
       }
     } else {
-      #All probabilities equal - invalid clusters 
-      assessClass <- rep("Invalid", nrow(GSEClassInfo))
+# actually, lets always choose one to randomly be the "control" if we cant detect it...     
+#      if(analysis_type == "All experiments"){
+      
+          ## if we want to include all GSE, we will randomly permute one cluster to be different
+        assessClass <- rep("Low", nrow(GSEClassInfo))
+        randomCluster <- sample(1:nrow(GSEClassInfo), 1)
+        GSEClassInfo$predLabel[randomCluster] <- setdiff(c(T,F),GSEClassInfo$predLabel[randomCluster])
+        
+#      }else{
+        #All probabilities equal - invalid clusters 
+#        assessClass <- rep("Invalid", nrow(GSEClassInfo))
+#      }
       names(assessClass) <- rownames(GSEClassInfo)
     }
   } else {
@@ -554,23 +586,6 @@ FixLabels <- function(GSEclusters, predictions){
 }
 
 
-###########################################################
-###########################################################
-
-
-get.source <- function(GSM) {
-  source <- GSM$source_name_ch1
-  return(source)
-}
-
-## takes in GSM metadata
-get.combined.table2 <- function(GSM) {
-  characteristicsTable <- get.characteristics.table(GSM)
-  titleTable <- get.title.table(GSM)
-  souceInfo <- get.source(GSM)
-  combined.table <- cbind(t(titleTable),characteristicsTable,souceInfo)
-  return(combined.table)
-}
 
 ###################################################################
 #Get GSM clusters and labels
@@ -795,16 +810,80 @@ check.annotation <- function(GPLId){
 get.transform.data <- function(GSEId) {
   
   GPLId <- unlist(get.gpl(GSEId))
-  
   #Check annotation 
   if(!check.annotation(GPLId)) {
-    return(NA)
+    print(paste0("No annotation file for this platform. Trying to use GEMMA to get annotation files: ", GSEId))
+    
+    GPL_anno <- get_GPL_annotations_GEMMA(GPLId)
+    if(nrow(GPL_anno)>1){
+      pdf <- data.frame(ID = GPL_anno$ProbeName, GT = GPL_anno$GeneNames, GS = GPL_anno$GeneSymbols, GI = GPL_anno$NCBIids)
+      rownames(pdf) <- pdf$ID
+      colnames(pdf) <- c("ID" ,"Gene title" ,"Gene symbol","Gene ID")
+      
+      apdf <- AnnotatedDataFrame()
+      pData(apdf) <- pdf
+      #return(NA)
+      gset <- getGEO(GSEId, GSEMatrix =TRUE, getGPL = F) ## GSE41277 and GSE39553 gets stuck here (needs AnnotGPL= FALSE)
+      if(is.na(gset)){return(NA)}
+      
+      if (length(gset) > 1) idx <- grep(GPLId, attr(gset, "names")) else idx <- 1 ##
+      gset <- gset[[idx]]
+      
+      featureData(gset) <- apdf
+      
+      
+    } else {
+      print(paste0("No annotation for this platform on GEMMA. Trying user supplied annotations: ", GSEId))
+      gset <- getGEO(GSEId, GSEMatrix =TRUE, getGPL = T)
+      
+      if(is.na(gset)){return(NA)}
+      
+      if (length(gset) > 1) idx <- grep(GPLId, attr(gset, "names")) else idx <- 1 ##
+      gset <- gset[[idx]]
+      
+      pdf <- pData(featureData(gset))
+      
+      # This is to detect gene column names from non-standard annotations. This could be more sophisticated by layering the word gene with "ID" and "name".
+      gene_columns <- grepl("^gene|ORF",colnames(pdf), ignore.case = T)
+      
+      if(sum(gene_columns)>0){
+        
+        pdf$GS <- gsub("(.{100}).*","\\1", pdf[,which(gene_columns)[1]])
+        pdf$GT <- gsub("(.{100}).*","\\1", pdf[,which(gene_columns)[min(2,sum(gene_columns))]])
+        pdf$GI <-gsub("(.{100}).*","\\1",  pdf[,which(gene_columns)[min(3,sum(gene_columns))]])
+        
+        
+      } else {
+        
+        print("No Gene symbols could be found in any annotations.")
+        
+        if(SimpleGeneSymbolsOnly){
+          print("Scrapping this GSE")
+          return(NA)
+        }
+        
+        print("Using probe ID only.")
+        
+        pdf$GT <- pdf$ID
+        pdf$GS <- pdf$ID
+        pdf$GI <- pdf$ID
+        
+      } 
+      
+      pdf <- pdf[,c("ID","GT","GS","GI")]
+      colnames(pdf) <- c("ID" ,"Gene title" ,"Gene symbol","Gene ID")
+      
+      apdf <- AnnotatedDataFrame()
+      pData(apdf) <- pdf
+      
+      featureData(gset) <- apdf
+    }
+    
+  }else {
+    gset <- getGEO(GSEId, GSEMatrix =TRUE, AnnotGPL=T) ## GSE41277 and GSE39553 gets stuck here (needs AnnotGPL= FALSE)
+    if (length(gset) > 1) idx <- grep(GPLId, attr(gset, "names")) else idx <- 1 ##
+    gset <- gset[[idx]]
   }  
-  
-  #Load series and platform data from GEO
-  gset <- getGEO(GSEId, GSEMatrix =TRUE, AnnotGPL=TRUE) ## GSE41277 and GSE39553 gets stuck here (needs AnnotGPL= FALSE)
-  if (length(gset) > 1) idx <- grep(GPLId, attr(gset, "names")) else idx <- 1 ##
-  gset <- gset[[idx]]
   
   # make proper column names to match toptable 
   fvarLabels(gset) <- make.names(fvarLabels(gset))
@@ -814,7 +893,8 @@ get.transform.data <- function(GSEId) {
   qx <- as.numeric(quantile(ex, c(0., 0.25, 0.5, 0.75, 0.99, 1.0), na.rm=T))
   LogC <- (qx[5] > 100) ||
     (qx[6]-qx[1] > 50 && qx[2] > 0) ||
-    (qx[2] > 0 && qx[2] < 1 && qx[4] > 1 && qx[4] < 2)
+    (qx[2] > 0 && qx[2] < 1 && qx[4] > 1 && qx[4] < 2) ||
+    max(ex) > 30
   if (LogC) { ex[which(ex <= 0)] <- NaN
   exprs(gset) <- log2(ex) }
   
@@ -827,9 +907,11 @@ filter.toptable <- function(tt){
   
   tt <- tt[na.filter,]
   
+  ## take the top 2/3 of expressed probes. 
   averages = tt$AveExpr
   
-  min.ave.exprs <- median(averages)
+  a <- sort(averages)
+  min.ave.exprs <- a[length(a)/3]
   exprs.filter <- averages>min.ave.exprs
   
   gSymbols <- tt$Gene.symbol
@@ -881,6 +963,7 @@ get.match.top.table <- function(sml,gset) {
   return(tT)
 }
 
+# These functions are not used any more
 #Generate a list of valid genes from gset for comparison 
 get.gset.genes <- function(gSet) {
   geneSymbols <- fData(gSet)$Gene.symbol
@@ -968,11 +1051,9 @@ get.GSE.top.tables <- function(GSEId,MatchedPairs,CurGSEmetadata) {
     get.match.top.table(x,gset)
   })
   
-  
   ################
   ## BREAK HERE INTO SEPARATE NAMING FUNCTION
   ################
-  
   
   combinedTable <- data.frame(do.call(rbind.fill, lapply(CurGSEmetadata$GSMMeta, get.combined.table2)))
   rownames(combinedTable) <- do.call(rbind, lapply(CurGSEmetadata$GSMMeta, function(x) {x$gsm}))
@@ -983,40 +1064,38 @@ get.GSE.top.tables <- function(GSEId,MatchedPairs,CurGSEmetadata) {
     return(x$Mut)
   })
   
-  potNames <- lapply(mutGSMClusters, function(x) {
-    get.table.name(x,gset,combinedTable)
-  })
+  comparisons <- do.call(rbind, lapply(1:length(MatchedPairs), function(I) {
+    return(data.frame(index = I, mut = paste(MatchedPairs[[I]]$Mut, collapse=" "), control = paste(MatchedPairs[[I]]$WT, collapse=" "), direction = MatchedPairs[[I]]$Perturbation))
+  }))
   
-  fileNames <- lapply(potNames, function(x){
-    if(length(x) != 0) {
-      get.file.name(x)
-    } else {
-      return(character())
-    }
-  })
+  return(list(topTables = topTables, comparisons = comparisons))
+}
+
+
+writeTopTables <- function(GSEId, topTables, comparisons, outputFolder = "unnamed"){
+  #Create folder
   
-  for (i in 1:length(fileNames)) {
-    if(length(fileNames[[i]]) != 0){
-      names(topTables)[i] <- fileNames[[i]]
-    }
+  if(!file.exists(paste(getwd(),"/",outFolder,sep = ""))){
+    dir.create(paste(getwd(),"/",outFolder,sep = ""))
   }
   
+  if(!file.exists(paste(getwd(),"/",outFolder,"/", outputFolder,sep = ""))){
+    dir.create(paste(getwd(),"/",outFolder,"/", outputFolder,sep = ""))
+  }
   
-  filenames.confidence <- assess.confidence(fileNames)
-  names(filenames.confidence) <- fileNames
+  folderDir <- paste(getwd(),"/",outFolder,"/", outputFolder,"/",GSEId,sep = "")
+  dir.create(folderDir)
+  #Write files 
   
+  for(j in 1:length(topTables)){
+    write.table(topTables[[j]], file = paste(folderDir,"/",j,"_",gsub("[[:punct:]]","-",names(topTables[j])),"_",comparisons$direction[j],".txt",sep =""), quote=FALSE, sep="\t", row.names = FALSE)
+  }
   
-  return(list(topTables = topTables,filenames = filenames.confidence))
 }
 
 
-renameTopTables <- function(GSEId, topTables, filenames.confidence, MatchedPairs){
-  names(topTables) <- names(filenames.confidence)
-  return(topTables)
-}
 
-
-writeTopTables <- function(GSEId, topTables, outputFolder = "unnamed"){
+writeComps <- function(GSEId, comparisons, topTables, outputFolder = "unnamed"){
   #Create folder
   
   
@@ -1031,16 +1110,20 @@ writeTopTables <- function(GSEId, topTables, outputFolder = "unnamed"){
   folderDir <- paste(getwd(),"/",outFolder,"/", outputFolder,"/",GSEId,sep = "")
   dir.create(folderDir)
   #Write files 
+  
   for(j in 1:length(topTables)){
-    write.table(topTables[[j]], file = paste(folderDir,"/",j,"_",names(topTables[j]),".txt",sep =""), quote=FALSE, sep="\t", row.names = FALSE)
+    comparisons$verified_molecule[j] = names(topTables[j])
+    comparisons$filename[j] = paste(j,"_",names(topTables[j]),"_",comparisons$direction[j],".txt",sep ="") 
   }
+  
+  write.table(comparisons, file = paste(folderDir,"/comparisons.txt",sep =""), quote=FALSE, sep="\t", row.names = FALSE)
   
 }
 
 
-
-
 rename.MatchedPairs <- function(GSE, MatchedPair, GSEmetadata){
+  print(paste0("Renaming ", GSE))
+  
   best.names <- best.name(GSE, MatchedPair, GSEmetadata)
   suppressWarnings(if(best.names == "Species not supported"){return(NA)})
   
@@ -1121,6 +1204,16 @@ check.names <- function(gene.counts){
   
   genes <- names(gene.counts)
   
+  ## some common words should not be considered because they always match words like "embryo" "cell" "transcriptome" "myocardial"
+  genes <- genes[(!tolower(genes) %in% c("cript","myoc","emb","cel","ell") )]
+  gene.counts <- gene.counts[genes]
+  
+  if(length(genes) < 1){
+    gene.counts <- 1
+    names(gene.counts) <- "none"
+    genes <- "none"
+  }
+  
   lengths <- unlist(lapply(genes, nchar))
   combined <- gene.counts * lengths
   best <- which(combined == max(combined))
@@ -1129,11 +1222,13 @@ check.names <- function(gene.counts){
   names(confidence) <- genes
   confidence[!short] <- "Medium"
   
-  if(!short[best] & gene.counts[best] > 1){
+  if((!short[best]) & (gene.counts[best] > 1)){
     confidence[best] <- "High"
   } else if (short[best] & gene.counts[best] > 1){
     confidence[best] <- "Medium"
   }
+  
+  
   
   return(list(Confidence = confidence, Best = best))
 }
@@ -1233,9 +1328,9 @@ nameGSMs <- function(GSEMetadata) {
 #Get species from Metadata and return emsembl format
 get.species <- function(GSEmetadata){
   
-  
-  
   species <- GSEmetadata$GSMMeta[[1]]$organism_ch1
+  
+  if(is.null(species)){return(NULL)}
   
   eSpecies <- tolower(paste(substring(species, 1, 1),strsplit(species," ")[[1]][2],sep = ""))
   
@@ -1310,7 +1405,8 @@ find_supported_datasets <- function(default=TRUE){
   return(organisms)
 }
 
-supported_species <- find_supported_datasets()
+supported_species <- sort(find_supported_datasets())
+
 
 ##########################
 # use ENSEMBL to generate mapping  between ENSEMBL ids and gene symbols
@@ -1328,6 +1424,17 @@ fix.list <- function(geneDF) {
   geneList <- geneDF[,1][nchar(geneDF[,1])>2] #Only gene symbols longer than 2 characters
   uniqueList <- unique(gsub("[[:space:]]\\([^\\]]*\\)", "",geneList)) #remove brackets and content eg. "TMEM151A (1 of 2)"
   return(uniqueList)
+}
+
+
+#Allow us to annotate outlier GPLs
+get_GPL_annotations_GEMMA <- function(GPL){
+  url <- paste0("https://gemma.msl.ubc.ca/rest/v2/platforms/",GPL,"/annotations/")
+  raw.result <- GET(url = url)
+  bin <- httr::content(raw.result, "raw")
+  writeBin(bin, "myfile.gz")
+  GPLannotations <- read.table("myfile.gz", header = T, sep="\t", comment.char = "#", quote="")
+  return(GPLannotations)
 }
 
 
@@ -1351,49 +1458,421 @@ default.page.length <- 5
 
 shinyServer(function(input, output, session) {
   
+  session$onSessionEnded(stopApp)
+  
   hide(id = "loading-content", anim = TRUE, animType = "fade")
   
   CurTab <- reactiveValues(Tab = "Verify")
   
-  CurGSEs <- reactiveValues(GSEs = character(0))
+  #CurGSEs <- reactiveValues(GSEs = character(0))
+  CurGSEs <- reactiveValues(GSEs = NULL)
   
-  obsg <- observeEvent(input$uploadFile, {
-    file <- read.table(input$uploadFile$datapath, sep=" ", stringsAsFactors = F)
-    if(ncol(file) > 1){
-      reload.file <- read.table(input$uploadFile$datapath, sep=" ", header=TRUE, stringsAsFactors = F, row.names = 1)
-      CurGSEs$GSEs = rownames(reload.file)[reload.file$Perturbation == 1]
+  model <- reactive({
+    if(exists("LabelModel")){
+      return(LabelModel)
     } else {
-      CurGSEs$GSEs = unlist(file)
+      print("ERROR: No model for predicting labels of GSE")
+      return(NULL)
+    }
+  })
+  
+  
+  #########################################
+  ## Add tool tips
+  ## search tab
+  addTooltip(session, id = "searchTerm", title = "You can use & or | for multiple keywords.", placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "uploadFile", title = "e.g. GSE14491 GSE28448 GSE42373...", placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "analysis_select", title = "Which kind of experimental design are you interested in? 'Perturbations' streamline GRN construction. 'All experiments' will not restrict which GSE are processed.",  placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "species_select_search_div", title = "GEOracle can process data from one species at a time.", placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "microarray_checkbox_div", title = "Do you want to display only microarray results which can be rapidly processed in the next step? Recommended.", placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "keep_button_div", title = "Warning: This will remove all GSE that are not currently selected from the above list!", placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "remove_button_div", title = "Warning: This will remove the currently selected GSE from the above list!", placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "download_GSE_button_div", title = "For longer analyses and for reproducibility we suggest you download and save your list of GSE.", placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "analyse_GSE_button_div", title = "If you want to analyse the above list directly, you can. This will take you to the next tab and begin clustering samples. We suggest downloading this list of GSE first.", placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "GSEtext", title = "You can type or copy & paste your own list of GSE in here, separated by whitespace.", placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "upload_file_div", title = "You can upload a text file with a list of GSE separated by whitespace here.", placement = "bottom", trigger = "hover")
+  
+  #upload / filter tab
+  addTooltip(session, id = "filter_select", title = "Select how to filter the list of GSE for your desired analysis.", placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "speciesUI", title = "By default the most common species in the list of GSE is selected.", placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "minClusterSize", title = "What is the minimum size of a cluster of GSM samples to consider? You need 3 for an inerpretable p-value.", placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "maxClusterSize", title = "What is the maximum size of a cluster of GSM samples to consider?", placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "allbetween", title = "Do you need every cluster size to fit between the min and max? This effectively toggles cluster size filtering on or off.", placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "simpleOnly", title = "Only consider GSE with 1 comparison (likely to be paired correctly). This is useful for automated analyses.", placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "maxcomps", title = "The maximum number of comparisons within a GSE before it is filtered out. Some GSE have hundreds of irrelevent samples and comparisons which can slow down the analysis.", placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "singlePlatformOnly", title = "Only consider GSE with a single platform (technology). It is currently not trivial to process GSE with GSM from multiple platforms. Recommended.", placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "onechannel", title = "Filter out microarrays with more than one channel as they can not be automatically processed at this stage. Recommended.", placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "predpert", title = "Only consider GSE which are predicted to be perturbation experiments.", placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "gene_symbols_only", title = "Only include GSE where gene symbols can be easily automatically annotated. If not, the process is MUCH slower and some results may contain microarray probe IDs only, but you will process more GSE.", placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "see_all_GSE", title = "Just let all GSE through the filtering stage. Not recommended.", placement = "bottom", trigger = "hover")
+  
+# set DE 
+  addTooltip(session, id = "folder", title = "The output folder name to save results in. This could represent your entire analysis. e.g. 'Human heart failure'.", placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "logfc", title = "The absolute Log2 fold change threshold to use for automatically detecting differentially expressed genes. The full results are also saved.", placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "pval", title =  "The Benajmini & Hochberg adjusted p-value threshold to use for automatically detecting differentially expressed genes. The full results are also saved.", placement = "bottom", trigger = "hover")
+  addTooltip(session, id = "process", title =  "Calculate differential expression for all GSE. This can take a while.", placement = "bottom", trigger = "hover")
+
+  #########################################
+  ## search function inspired by ScanGEO implementation
+  
+  GSEsToInclude <- reactiveValues(include=1)
+  
+  output$analysis_select <- renderUI({ 
+    selectInput('analysis_type', 'Experiment type', c("Perturbations","All experiments"), selected = "Perturbations")
+  })
+  
+  output$GEoracleLogo2 <- output$GEoracleLogo <- renderImage({
+    
+    list(src = "georacle.png",
+         title = "GEOracle",
+         contentType = 'image/png',
+         alt = "GEOracle Logo",
+         align = "left",
+         width="90%")
+  }, deleteFile = FALSE)
+  
+  datasetInput_1 <- eventReactive(input$find, {
+    
+    withProgress(message = "Searching GEO:",
+                 detail = "this can be slow for generic search terms as we must retrieve GSM metadata to filter the species.", value = 0.2, {
+                   
+                   ### formatting search terms into SQL query with & and | functionality
+                   
+                   search_input <- toupper(input$searchTerm)
+                   
+                   if(grepl("\\&", search_input)&grepl("\\|", search_input)){
+                     
+                     showModal(modalDialog(
+                       title = "Input Error",
+                       "We can only handle one type of complex search symbol (& or |) at a time. Please try another search.",
+                       easyClose = TRUE
+                     ))
+                     
+                     Final_query <- "select title, gse, type, submission_date from gse where title like '%Input Error%'"
+                     
+                   } else if(grepl("\\&", search_input)){
+                     
+                     query_words <- trimws(strsplit(search_input,'\\&')[[1]])
+                     
+                     formatted_query_words <- paste("'%", query_words, "%'", sep="")
+                     
+                     combo <- lapply(formatted_query_words, function(query_word){
+                       paste(c("title like","summary like","overall_design like"), query_word, collapse = " or ")
+                     })
+                     
+                     AND_joint_query <- paste0("(", paste(combo, collapse=") and ("), ")")
+                     
+                     Final_query <- paste("select title, gse, type, submission_date from gse where ", AND_joint_query)
+                     
+                   } else if(grepl("\\|", search_input)){
+                     
+                     query_words <- trimws(strsplit(search_input,'\\|')[[1]])
+                     
+                     formatted_query_words <- paste("'%", query_words, "%'", sep="")
+                     
+                     combo <- lapply(formatted_query_words, function(query_word){
+                       paste(c("title like","summary like","overall_design like"), query_word, collapse = " or ")
+                     })
+                     
+                     OR_joint_query <- paste0("(", paste(combo, collapse=") | ("), ")")
+                     
+                     Final_query <- paste("select title, gse, type, submission_date from gse where ", OR_joint_query)
+                   } else { 
+                     query_words <- trimws(strsplit(search_input,'\\|')[[1]])
+                     formatted_query_words <- paste("'%", query_words, "%'", sep="")
+                     joint_query <- paste(c("title like","summary like","overall_design like"), formatted_query_words, collapse = " or ")
+                     Final_query <- paste("select title, gse, type, submission_date from gse where ", joint_query, sep="")
+                   }
+                   
+                   incProgress(amount = 0.2, detail = "Querying database: this can be slow for generic search terms.")
+                   
+                   ress <- dbGetQuery(metadata, Final_query)
+                   
+                   searchedGSEmetadata <- lapply(ress$gse, tryCatch({grabAllMetadataGSE}, error=function(e){
+                     
+                     cat("ERROR when getting Metadata: ",conditionMessage(e), "\n")
+                     return(NA)
+                   }))
+                   
+                   
+                   
+                   names(searchedGSEmetadata) <- ress$gse
+                   searchedGSEmetadata <- searchedGSEmetadata[!is.na(searchedGSEmetadata)]
+                   
+                   incProgress(amount = 0.1, detail = "Figuring out species")
+                   
+                   species <- lapply(ress$gse, function(x){
+                     
+                     if(!x %in% names(searchedGSEmetadata)){
+                       return("none") 
+                     }
+                     
+                     X <- searchedGSEmetadata[[x]]
+                     
+                     if(nrow(X$GSMMeta[[1]]) < 1){return(NA)}
+                     
+                     gsespecies <- get.species(X)
+                     
+                     if(is.null(gsespecies)){return(NA)}
+                     
+                     return(tolower(gsub("(.).* (.*)","\\1\\2",gsespecies)))
+                     
+                   })
+                   names(species) <- ress$gse
+                   
+                   ress$species <- species
+                   
+                 })
+    
+    
+    if(input$GSE_platform_filter){
+      filtered.datasetInput <- na.omit(ress[ress$species==input$selectSpecies,])
+      filtered.datasetInput <- filtered.datasetInput[grepl("Expression profiling by array", filtered.datasetInput$type),]
+    } else {
+      filtered.datasetInput <- na.omit(ress[ress$species==input$selectSpecies,])
     }
     
-    AllGSEmetadata <- reactive({
-      Metadata <- lapply(CurGSEs$GSEs, tryCatch({grabAllMetadataGSE}, error=function(e){
-        cat("ERROR when getting Metadata: ",conditionMessage(e), "\n")
-        return(NA)
-      }))
-      names(Metadata) <- CurGSEs$GSEs
-      return(Metadata[!is.na(Metadata)])
+    GSEsToInclude$include <- filtered.datasetInput$gse
+    
+    return(filtered.datasetInput)
+  })
+  
+  
+  output$Dim <- renderText(dim(datasetInput())[1])
+  
+  datasetInput <- reactive({
+    datasetInput_1()[datasetInput_1()$gse%in%GSEsToInclude$include,]
+  })
+  
+  output$Dim <- renderText(dim(datasetInput())[1])
+  
+  output$keep.button <-
+    renderUI(expr = if (input$find & (dim(datasetInput())[1] > 0)) {
+      actionButton("keepSelectedGSE", label = "Keep only selected GSE", icon("check"), style="color: #fff; background-color: green; border-color: #2e6da4")
+    } else {
+      NULL
+    })
+  
+  output$remove.button <-
+    renderUI(expr = if (input$find & (dim(datasetInput())[1] > 0)) {
+      actionButton("removeSelectedGSE", label = "Remove selected GSE", icon("remove"), style="color: #fff; background-color: #ff6b30; border-color: #2e6da4")
+    } else {
+      NULL
+    })
+  
+  observeEvent(
+    {input[["keepSelectedGSE"]]},{
+      
+      GSEsToInclude$include <- datasetInput()$gse[input$GEOtable_rows_selected]
+      
+    }, ignoreNULL = TRUE, autoDestroy = TRUE, priority = 1)
+  
+  observeEvent(
+    {input[["removeSelectedGSE"]]},{
+      
+      GSEsToInclude$include <- setdiff(GSEsToInclude$include, datasetInput()$gse[input$GEOtable_rows_selected])
+      
+    }, ignoreNULL = TRUE, autoDestroy = TRUE, priority = 1)
+  
+  output$download.button <-
+    renderUI(expr = if (input$find & (dim(datasetInput())[1] > 0)) {
+      tagList(
+        renderText("For reproducibility we suggest you download the above list of GSE before proceeding.\n"),
+        downloadButton("downloadGSE", label = "Download entire list of GSE")
+      )
+    } else {
+      NULL
+    })
+  
+  output$batch.download.button <-
+    renderUI(expr = if (input$find & (dim(datasetInput())[1] > 20)) {
+      tagList(
+        hr(),
+        renderText("The long list of GSE has been batched into groups of 20 for easier processing. Processing many GSE in batches will help ensure you don't lose too much if the app crashes. It also helps deal with some memory issues."),
+        downloadButton("downloadGSEBatch", label = "Download pre-batched GSE")
+      )
+    } else {
+      NULL
+    })
+  
+  output$direct.analyse.button <-
+    renderUI(expr = if (input$find & (dim(datasetInput())[1] > 0)) {
+      tagList(
+        hr(),
+        #renderText("For longer analyses and for reproducibility we suggest you download and save your list of GSE. However if you want to analyse the above list now, you can."),
+        actionButton("directAnalyseGSE", label = "Analyse this list of GSE", icon("check"), style="color: #fff; background-color: #ff6b30; border-color: #2e6da4")
+      )
+    } else {
+      NULL
+    })
+  
+  
+  observeEvent(input$find, {
+    
+    if (input$searchTerm > 0){
+      if (dim(datasetInput())[1] == 0) {
+        output$datamessage <- renderText(paste(dim(datasetInput())[1],
+                                               "studies found \n searching for \"", isolate(input$searchTerm), "\"",
+                                               "\n in", isolate(input$selectSpecies),
+                                               "\n Try modifying your search term"))        
+      } else {
+        output$datamessage <- renderText(paste(dim(datasetInput())[1],
+                                               "studies found \n searching for \"", isolate(input$searchTerm), "\"",
+                                               "\n in", isolate(input$selectSpecies)
+        ))
+      }
+    } else {
+      output$datamessage <- renderText("You didn't enter a search term")
+    }
+    
+    output$searchStatus <- renderUI({
+      verbatimTextOutput('datamessage')
+    })
+    
+    output$GEOtable <- renderDataTable({
+      
+      Summary_tab <<- datasetInput()
+      Summary_tab$gse <<- unlist(lapply(datasetInput()$gse, function(x){
+        paste0("<a href='", "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=",
+               x, "' target='_blank'>", x,"</a>")}))
+      return(Summary_tab)
+    }, escape = FALSE)
+    
+    
+  })
+  
+  output$downloadGSE <- downloadHandler(
+    
+    filename = function() { paste0("GEOracle_search_",input$selectSpecies, "_", input$searchTerm, '.txt') },
+    content = function(file) {
+      write.table(datasetInput()$gse, gsub("\\|","OR",file), row.names = F, col.names = F, quote= F, sep="\t")
+    }
+  )
+  
+  ###
+  output$downloadGSEBatch <- downloadHandler(
+    
+    
+    
+    ###
+    
+    filename = paste0("GEOracle_search_",input$selectSpecies, "_", input$searchTerm, '.zip'),
+    content = function(fname) {
+      
+      search_ID <- gsub("\\|","OR",paste0("GEOracle_search_",input$selectSpecies, "_", input$searchTerm))
+      
+      if(!file.exists(paste(getwd(),"/",outFolder,sep = ""))){
+        dir.create(paste(getwd(),"/",outFolder,sep = ""))
+      }
+      
+      if(!file.exists(paste(getwd(),"/",outFolder,"/", search_ID,sep = ""))){
+        dir.create(paste(getwd(),"/",outFolder,"/", search_ID,sep = ""))
+      }
+      
+      folderDir <- paste(getwd(),"/",outFolder,"/", search_ID,sep = "")
+      
+      gses_split <- split(datasetInput()$gse, ceiling(seq_along(datasetInput()$gse)/20))
+      
+      lapply(names(gses_split), function(S){
+        write.table(gses_split[[S]], file=paste0(folderDir, "/", S, ".txt"), sep="\t", col.names = F, row.names = F, quote=F)
+      })
+      
+      setwd(folderDir)
+      
+      fs <- list.files()
+      
+      zipfile <- zip(zipfile=fname, files=fs)
+      
+      setwd(this.dir)
+      
+      return(zipfile)
+    },
+    contentType = "application/zip"
+  )
+  
+  
+  GDSmeta <- dbGetQuery(metadata, "select * from gds\n")
+  GEOspecies <- sort(unique(tolower(gsub("(.).* ([a-z]*).*","\\1\\2",unique(GDSmeta$platform_organism)))))
+  clean.species <- GEOspecies[nchar(GEOspecies) > 4]
+  
+  
+  
+  updateSelectInput(session, "selectSpecies", choices = clean.species,
+                    selected = "hsapiens")
+  
+  #################
+  
+  obs_de <- observeEvent(
+    input$submitGSETtext
+    ,{
+      CurGSEs$GSEs <- strsplit(input$GSEtext,"\\W")[[1]]
+    })
+  
+  obs_uf <- observeEvent(
+    input$uploadFile
+    ,{
+      file <- read.table(input$uploadFile$datapath, sep=" ", stringsAsFactors = F)
+      if(ncol(file) > 1){
+        reload.file <- read.table(input$uploadFile$datapath, sep=" ", header=TRUE, stringsAsFactors = F, row.names = 1)
+        CurGSEs$GSEs = rownames(reload.file)[reload.file$Perturbation == 1]
+      } else {
+        CurGSEs$GSEs = unlist(file)
+      }
+    })
+  
+  obs_da <- observeEvent(
+    input$directAnalyseGSE
+    ,{
+      CurGSEs$GSEs <- datasetInput()$gse
+      updateTabsetPanel(session, "inTabset",
+                        selected = "Process GSE list")
+    })
+  
+  AllGSEmetadata <- eventReactive(CurGSEs$GSEs, {
+    print("Obtaining Metadata")
+    Metadata <- lapply(CurGSEs$GSEs, tryCatch({grabAllMetadataGSE}, error=function(e){
+      cat("ERROR when getting Metadata: ",conditionMessage(e), "\n")
+      return(NA)
+    }))
+    names(Metadata) <- CurGSEs$GSEs
+    
+    return(Metadata[!is.na(Metadata)])
+    
+  })
+  
+  
+  
+  
+  GSEclusters <- eventReactive(AllGSEmetadata(),{
+    
+    print("Clustering Samples")
+    
+    
+    output$filter_select <- renderUI({ 
+      selectInput('filter', 'Strictness', c("Perturbations (Default)","All experiments (Loose)", "Custom"), selected = c("Perturbations (Default)","All experiments (Loose)")[(input$analysis_type == "All experiments") + 1])
     })
     
     output$speciesUI <- renderUI({ 
       selectInput("species", "Species", names(table(unlist(GSEspecies()))), selected = names(table(unlist(GSEspecies())))[which.max(table(unlist(GSEspecies())))], width = 200)
     })
     
-    GSEclusters <- reactive({
-      withProgress(message = "IN PROGRESS:",
-                   detail = "Clustering", value = 0.5, {
-                     clusters <- lapply(AllGSEmetadata(), GEOclustering)
-                   })
-      return(clusters)
-    })
     
-    model <- reactive({
-      if(exists("LabelModel")){
-        return(LabelModel)
-      } else {
-        return(sfit)
-      }
-    })
+    
+    withProgress(message = "IN PROGRESS:",
+                 detail = "Clustering: Initialising", value = 0.5, {
+                   clusters <- lapply(AllGSEmetadata(), function(X){
+                     incProgress(0.9/length(AllGSEmetadata()), detail = paste0("Clustering: ",X$gse))
+                     return(GEOclustering(X))
+                   })
+                 })
+    return(clusters)
+  })
+  
+  
+  MatchedPairs <- eventReactive(GSEclusters(), {
+    
+    print("Matching clusters")
+    
     
     clusterLabels <- reactive({
       Predictions <- lapply(names(GSEclusters()), function(X){LabelClusters(GSEclusters()[[X]], AllGSEmetadata()[[X]], model())})
@@ -1402,543 +1881,597 @@ shinyServer(function(input, output, session) {
     })
     
     FixedLabels <- reactive({
-      FixedPredictions <- mapply(FixLabels, GSEclusters(), clusterLabels())
+      
+      FixedPredictions <- mapply(FixLabels, GSEclusters(), clusterLabels(), input$analysis_type, SIMPLIFY = F)
+      
       invalid <- unlist(lapply(FixedPredictions, function(X){return(X$confidence[1] == "Invalid")}))
       return(FixedPredictions[!invalid])
     })
     
-    MatchedPairs <- reactive({
-      withProgress(message = "IN PROGRESS:",
-                   detail = "Matching Clusters", value = 0.5, {
-                     Pairs <- lapply(names(FixedLabels()), function(X){
-                       res <- MatchClusters(FixedLabels()[[X]], AllGSEmetadata()[[X]])
-                       names(res) <- unlist(lapply(res, function(X){paste(X$Mut, X$WT, collapse="_")}))
-                       return(res)
-                     })
-                     names(Pairs) <- names(FixedLabels())
+    withProgress(message = "IN PROGRESS:",
+                 detail = "Matching Clusters: Initialising", value = 0.1, {
+                   Pairs <- lapply(names(FixedLabels()), function(X){
+                     incProgress(amount = 0.8/length(FixedLabels()), detail = paste0("Matching Clusters: ", X))
+                     res <- MatchClusters(FixedLabels()[[X]], AllGSEmetadata()[[X]])
+                     names(res) <- unlist(lapply(res, function(X){paste(X$Mut, X$WT, collapse="_")}))
+                     return(res)
                    })
-      return(Pairs)
+                   names(Pairs) <- names(FixedLabels())
+                 })
+    return(Pairs)
+  })
+  
+  GSEplatforms <- reactive({
+    res <- lapply(names(MatchedPairs()), function(x){
+      X <- AllGSEmetadata()[[x]]
+      gpls <- unique(unlist(lapply(X$GSMMeta, function(x){
+        x$gpl
+      })))
     })
-    
-    GSEplatforms <- reactive({
-      res <- lapply(names(MatchedPairs()), function(x){
-        X <- AllGSEmetadata()[[x]]
-        gpls <- unique(unlist(lapply(X$GSMMeta, function(x){
-          x$gpl
-        })))
-      })
-      names(res) <- names(MatchedPairs())
-      return(res)
+    names(res) <- names(MatchedPairs())
+    return(res)
+  })
+  
+  GSEspecies <- reactive({
+    res <- lapply(names(MatchedPairs()), function(x){
+      X <- AllGSEmetadata()[[x]]
+      species <- unique(unlist(lapply(X$GSMMeta, function(x){
+        x$organism_ch1
+      })))
     })
-    
-    GSEspecies <- reactive({
-      res <- lapply(names(MatchedPairs()), function(x){
-        X <- AllGSEmetadata()[[x]]
-        species <- unique(unlist(lapply(X$GSMMeta, function(x){
-          x$organism_ch1
-        })))
-      })
-      names(res) <- names(MatchedPairs())
-      return(res)
+    names(res) <- names(MatchedPairs())
+    return(res)
+  })
+  
+  
+  GSEchannels <- reactive({
+    res <- lapply(names(MatchedPairs()), function(x){
+      X <- AllGSEmetadata()[[x]]
+      
+      channels <- unique(unlist(lapply(X$GSMMeta, function(x){
+        x$label_ch2
+      })))
     })
-    
-    GSEchannels <- reactive({
-      res <- lapply(names(MatchedPairs()), function(x){
-        X <- AllGSEmetadata()[[x]]
-        
-        channels <- unique(unlist(lapply(X$GSMMeta, function(x){
-          x$label_ch2
-        })))
-      })
-      names(res) <- names(MatchedPairs())
-      return(res)
-    })
-    
-    
-    output$numGSEs <- renderText(
-      paste0('You have ', length(MatchedPairs()), ' GSEs loaded')
+    names(res) <- names(MatchedPairs())
+    return(res)
+  })
+  
+  
+  output$numGSEs <- renderText(
+    paste0('You have ', length(MatchedPairs()), ' GSE that match your selected experiment type.')
+  )
+  
+  
+  
+  #########################################  
+  ### when click the GO button
+  obsr <- observeEvent(input$go, {
+    MPCs <- reactiveValues(
+      ## only those GSEs that pairing worked
+      mpairs = isolate(MatchedPairs()[unlist(lapply(MatchedPairs(), length)) > 0])
     )
     
-    
-    
-    #########################################  
-    ### when click the GO button
-    obsr <- observeEvent(input$go, {
-      MPCs <- reactiveValues(
-        ## only those GSEs that pairing worked
-        mpairs = isolate(MatchedPairs()[unlist(lapply(MatchedPairs(), length)) > 0])
-      )
+    # SETTING FILTERS
+    include.pairs <- reactive({
+      if(input$filter == "Perturbations (Default)"){
+        ## set strict defaults    
+        mincl <- 2 
+        maxcl <- 6
+        simple <- 0
+        singlePlatform <- 1
+        mainspecies <- names(table(unlist(GSEspecies())))[which.max(table(unlist(GSEspecies())))]
+        allbetween <- 0
+        maxcomps <- 10
+        oncehannel <- 1
+        predpert <- 1
+        SimpleSimpleGeneSymbolsOnly <<- 1
+      }else if(input$filter == "All experiments (Loose)"){
+        ## set strict defaults    
+        mincl <- 2 
+        maxcl <- 10
+        simple <- 0
+        singlePlatform <- 1
+        mainspecies <- names(table(unlist(GSEspecies())))[which.max(table(unlist(GSEspecies())))]
+        allbetween <- 0
+        maxcomps <- 20
+        oncehannel <- 1
+        predpert <- 0
+        SimpleGeneSymbolsOnly <<- 0
+      }else{
+        mincl <- input$minClusterSize 
+        maxcl <- input$maxClusterSize
+        
+        simple <- input$simpleOnly
+        singlePlatform <- input$singlePlatformOnly
+        mainspecies <- input$species
+        allbetween <- input$allbetween
+        maxcomps <- input$maxcomps
+        onechannel <- input$onechannel
+        predpert <- input$predpert
+        SimpleGeneSymbolsOnly <<- input$gene_symbols_only
+      }
       
-      # SETTING FILTERS
-      include.pairs <- reactive({
-        if(input$filter == "Default"){
-          ## set strict defaults    
-          mincl <- 2 
-          maxcl <- 5
-          simple <- 0
-          singlePlatform <- 1
-          mainspecies <- names(table(unlist(GSEspecies())))[which.max(table(unlist(GSEspecies())))]
-          allbetween <- 0
-          maxcomps <- 10
-          oncehannel <- 1
-          predpert <- 1
-        }else{
-          mincl <- input$minClusterSize 
-          maxcl <- input$maxClusterSize
-          
-          simple <- input$simpleOnly
-          singlePlatform <- input$singlePlatformOnly
-          mainspecies <- input$species
-          allbetween <- input$allbetween
-          maxcomps <- input$maxcomps
-          onechannel <- input$onechannel
-          predpert <- input$predpert
+      
+      platforminclude <- unlist(lapply(names(MPCs$mpairs), function(X){
+        numplatforms <- GSEplatforms()[[X]]
+        channels <- GSEchannels()[[X]]
+        return(((length(numplatforms) == 1) | (!singlePlatform)) & is.na(channels[1]))
+      }))
+      
+      simpleinclude <- unlist(lapply(MPCs$mpairs, function(X){
+        return(length(X) == 1)
+      }))
+      
+      toobiginclude <- unlist(lapply(MPCs$mpairs, function(X){
+        return(length(X) <= maxcomps)
+      }))
+      
+      speciesinclude <- unlist(lapply(names(MPCs$mpairs), function(X){
+        spec <- GSEspecies()[[X]]
+        if(length(spec) > 1){ return(FALSE) } else {
+          return(spec == mainspecies)
         }
-        
-        
-        platforminclude <- unlist(lapply(names(MPCs$mpairs), function(X){
-          numplatforms <- GSEplatforms()[[X]]
-          channels <- GSEchannels()[[X]]
-          return(((length(numplatforms) == 1) | (!singlePlatform)) & is.na(channels[1]))
-        }))
-        
-        simpleinclude <- unlist(lapply(MPCs$mpairs, function(X){
-          return(length(X) == 1)
-        }))
-        
-        toobiginclude <- unlist(lapply(MPCs$mpairs, function(X){
-          return(length(X) <= maxcomps)
-        }))
-        
-        speciesinclude <- unlist(lapply(names(MPCs$mpairs), function(X){
-          spec <- GSEspecies()[[X]]
-          if(length(spec) > 1){ return(FALSE) } else {
-            return(spec == mainspecies)
-          }
-        }))
-        
-        clustersizeinclude <- unlist(lapply(MPCs$mpairs, function(X){
-          lengths <- lapply(X, function(Y){
-            return(c(length(strsplit(Y$Mut," ")[[1]]), length(strsplit(Y$WT," ")[[1]])))
-          })
-          maxpass <- unlist(lengths) <= maxcl
-          minpass <- unlist(lengths) >= mincl
-          
-          if(allbetween){
-            return((sum(maxpass) == length(maxpass)) & (sum(minpass) == length(minpass)))
-          } else {
-            return((sum(maxpass) > 0) & (sum(minpass) > 0))
-          }
-        }))
-        
-        predpertinclude <- unlist(lapply(names(MPCs$mpairs), function(X){
-          if(predpert == 0){
-            return(TRUE)
-          }
-          return(as.logical(predict(PertModel, matrix(get.GSE.feature.vector(X), 1, length(new.feats.to.keep)))))
-        }))
-        
-        includedf <- data.frame(si = (simpleinclude|!simple), ci = clustersizeinclude, pi = platforminclude, spi = speciesinclude, tbi= toobiginclude, ppi = predpertinclude)
-        
-        
-        
-        
-        allinclude <- (simpleinclude|!simple) & clustersizeinclude & platforminclude & speciesinclude & toobiginclude & predpertinclude
-        
-        
-        
-        return(allinclude)
-      })
+      }))
       
-      ## perform filtering
-      FMPCs <- reactive({
-        m <- na.omit(MPCs$mpairs[include.pairs()])
-        withProgress(message = "Detecting names...",
-                     detail = "This could take a while", value = 0.5, {
-                       
-                       
-                       m2 <- lapply(na.omit(names(m)), function(X){
-                         return( rename.MatchedPairs(X, m[[X]], AllGSEmetadata()[[X]]))
-                       })
-                     })
-        names(m2) <- na.omit(names(m))
+      clustersizeinclude <- unlist(lapply(MPCs$mpairs, function(X){
+        lengths <- lapply(X, function(Y){
+          return(c(length(strsplit(Y$Mut," ")[[1]]), length(strsplit(Y$WT," ")[[1]])))
+        })
+        maxpass <- unlist(lengths) <= maxcl
+        minpass <- unlist(lengths) >= mincl
         
-        
-        return(m2)
-      })
-      
-      FMPC2 <<- reactiveValues(
-        mpairs = isolate(FMPCs())
-        
-      )
-      
-      ## create list of filtered GSEs    
-      processedGSEsDF <- reactive({
-        valid.lengths <- unlist(lapply(FMPC2$mpairs, function(X){ 
-          return(length(X) - sum(unlist(lapply(X, is.na))))
-        }))
-        
-        
-        
-        df <- data.frame(Comps = valid.lengths, row.names = names(FMPC2$mpairs))
-      })
-      
-      
-      pages <- reactiveValues(
-        page = 0
-      )
-      
-      pagesync <- reactive({
-        req(pages$page, input$processedGSEs_state)
-        
-        
-        if(pages$page == floor(input$processedGSEs_state$start / input$processedGSEs_state$length)){
-          return(TRUE)
+        if(allbetween){
+          return((sum(maxpass) == length(maxpass)) & (sum(minpass) == length(minpass)))
         } else {
-          return(FALSE)
+          return((sum(maxpass) > 0) & (sum(minpass) > 0))
         }
-      })
+      }))
       
-      
-      output$processedGSEs <- DT::renderDataTable({
-        
-        DT::datatable(processedGSEsDF(), selection = "single", options = list(lengthMenu = list(c(default.page.length, 3*default.page.length, -1), c(default.page.length, 3*default.page.length, 'All')),  pageLength = default.page.length, stateSave = TRUE
-                                                                              #datatable(head(iris, 30), callback = JS('table.page("next").draw(false);'))
-        ))
-      })
-      
-      
-      SelectedGSE <- reactive({
-        req(input$processedGSEs_row_last_clicked)
-        rownames(processedGSEsDF())[input$processedGSEs_row_last_clicked]
-      })
-      
-      
-      
-      observe({
-        invalidateLater(3000)
-        
-        
-        if(!isolate(pagesync())){
-          
-          session$sendCustomMessage("pager", pages$page)
+      predpertinclude <- unlist(lapply(names(MPCs$mpairs), function(X){
+        if(predpert == 0){
+          return(TRUE)
         }
-        
-      }, priority = -2)
+        return(as.logical(predict(PertModel, matrix(get.GSE.feature.vector(X), 1, length(new.feats.to.keep)))))
+      }))
       
-      ##################################################################################
-
+      includedf <- data.frame(si = (simpleinclude|!simple), ci = clustersizeinclude, pi = platforminclude, spi = speciesinclude, tbi= toobiginclude, ppi = predpertinclude)
       
-      output$matchedPairs <- renderUI({
-        req(SelectedGSE())
+      allinclude <- (simpleinclude|!simple) & clustersizeinclude & platforminclude & speciesinclude & toobiginclude & predpertinclude
+      
+      if(input$see_all_GSE){
+        allinclude <- rep(T, length(allinclude))
+      }
+      
+      return(allinclude)
+    })
+    
+    ## perform filtering
+    FMPCs <- reactive({
+      m <- na.omit(MPCs$mpairs[include.pairs()])
+      withProgress(message = "IN PROGRESS:",
+                   detail = "Detecting names: Retrieving gene list from Ensembl", value = 0.1, {
+                     
+                     
+                     m2 <- lapply(na.omit(names(m)), function(X){
+                       renamed.ress <- rename.MatchedPairs(X, m[[X]], AllGSEmetadata()[[X]])
+                       incProgress(0.9/length(m), detail = paste0("Detected names for: ", X))
+                       return(renamed.ress)
+                     })
+                   })
+      names(m2) <- na.omit(names(m))
+      
+      
+      return(m2)
+    })
+    
+    FMPC2 <<- reactiveValues(
+      mpairs = isolate(FMPCs())
+      #original_predicted_names = names(isolate(FMPCs())) - would be good to collect this information but cant yet
+    )
+    
+    ## create list of filtered GSEs    
+    processedGSEsDF <- reactive({
+      valid.lengths <- unlist(lapply(FMPC2$mpairs, function(X){ 
+        return(length(X) - sum(unlist(lapply(X, is.na))))
+      }))
+      
+      
+      
+      df <- data.frame(Comps = valid.lengths, row.names = names(FMPC2$mpairs))
+    })
+    
+    
+    pages <- reactiveValues(
+      page = 0
+    )
+    
+    pagesync <- reactive({
+      req(pages$page, input$processedGSEs_state)
+      
+      
+      if(pages$page == floor(input$processedGSEs_state$start / input$processedGSEs_state$length)){
+        return(TRUE)
+      } else {
+        return(FALSE)
+      }
+    })
+    
+    
+    output$processedGSEs <- DT::renderDataTable({
+      
+      DT::datatable(processedGSEsDF(), selection = "single", options = list(lengthMenu = list(c(default.page.length, 3*default.page.length, -1), c(default.page.length, 3*default.page.length, 'All')),  pageLength = default.page.length, stateSave = TRUE
+                                                                            #datatable(head(iris, 30), callback = JS('table.page("next").draw(false);'))
+      ))
+    })
+    
+    
+    SelectedGSE <- reactive({
+      req(input$processedGSEs_row_last_clicked)
+      rownames(processedGSEsDF())[input$processedGSEs_row_last_clicked]
+    })
+    
+    
+    
+    observe({
+      invalidateLater(3000)
+      
+      
+      if(!isolate(pagesync())){
         
-        
-        
-        MPC.l <- FMPC2$mpairs
-        req(MPC.l[[SelectedGSE()]])
-        
-        withProgress(message = "Loading...",
-                     detail = "Just a sec.", value = 0.5, {
-                       GSEmeta <- AllGSEmetadata()[[SelectedGSE()]]
-                       GSMmeta <- GSEmeta$GSMMeta
-                       matchoutputs <- lapply(1:length(MPC.l[[SelectedGSE()]]), function(Y){
-                         X <-  MPC.l[[SelectedGSE()]][[Y]]
-                         suppressWarnings(
-                           if(is.na(X)) return(h3(paste("REMOVED COMPARISON ", Y), style = "color: #FF6200;", align = "center"))
-                         )
-                         
-                         
-                         
-                         
-                         muts <- unlist(strsplit(X$Mut, " "))
-                         wts <- unlist(strsplit(X$WT, " "))
-                         pert <- X$Perturbation
-                         
-                         GSMtitles <- data.frame(do.call(rbind, lapply(GSMmeta, function(XX){return(c(GSM = XX$gsm, Title = XX$title))})))
-                         
-                         muts.titles <- GSMtitles[GSMtitles$GSM%in%muts,]
-                         wts.titles <- GSMtitles[GSMtitles$GSM%in%wts,]
-                         
-                         alloutputs <- list(
-                           hr(style = "height: 10px; border: 0; box-shadow: 0 -10px 5px -10px #8c8b8b inset;")
-                           ,
-                           div(style="display:inline-block",
-                               if(nchar(names(MPC.l[[SelectedGSE()]])[Y])>20){
-                                 h4(renderText(paste0(substr(names(MPC.l[[SelectedGSE()]])[Y], 1, 20), "...")))
-                               } else {
-                                 h4(renderText(names(MPC.l[[SelectedGSE()]])[Y]))
-                               }
-                           )
-                           ,
-                           div(style="display:inline-block",
-                               h3(renderText(pert)) 
-                           )
-                           ,
-                           div(style="display:inline-block",
-                               textInput(paste0("namebox_", SelectedGSE(), "_", Y), "Rename", width=100)
-                           )
-                           ,
-                           div(style="display:inline-block",
-                               actionButton(paste0("rename_", SelectedGSE(), "_", Y),"", icon("pencil"), style="color: #000; background-color: #94F4FF; border-color: #000000")
-                           )
-                           ,
-                           
-                           div(style="display:inline-block",
-                               selectInput(paste0("perturbation_", SelectedGSE(), "_", Y), "+ or -", choices = c("+","-"), selected = pert, width = 100)
-                           )
-                           ,
-                           h4(renderText("\nPerturbation samples"))
-                           ,
-                           Mutants <- DT::renderDataTable(as.data.frame(muts.titles), options = list(dom = 't'))
-                           ,
-                           br()
-                           ,
-                           h4(renderText("\nControl samples"))
-                           ,
-                           Wilds = DT::renderDataTable(as.data.frame(wts.titles), options = list(dom = 't'))
-                           ,
-                           #Confidence = h4(renderText(c("\nConfidence is ", X$Confidence,"\n")))
-                           #,
-                           actionButton(paste0("remove_", SelectedGSE(), "_", Y),"REMOVE THIS COMPARISON", icon("remove"), style="color: #fff; background-color: #ff6b30; border-color: #2e6da4")
-                           ,
-                           hr(style = "height: 10px; border: 0; box-shadow: 0 10px 20px -10px #8c8b8b inset;")
-                         )
-                       })
+        session$sendCustomMessage("pager", pages$page)
+      }
+      
+    }, priority = -2)
+    
+    ##################################################################################
+    
+    
+    output$matchedPairs <- renderUI({
+      req(SelectedGSE())
+      
+      
+      
+      MPC.l <- FMPC2$mpairs
+      req(MPC.l[[SelectedGSE()]])
+      
+      withProgress(message = "Loading...",
+                   detail = "Just a sec.", value = 0.5, {
+                     GSEmeta <- AllGSEmetadata()[[SelectedGSE()]]
+                     GSMmeta <- GSEmeta$GSMMeta
+                     matchoutputs <- lapply(1:length(MPC.l[[SelectedGSE()]]), function(Y){
+                       X <-  MPC.l[[SelectedGSE()]][[Y]]
+                       suppressWarnings(
+                         if(is.na(X)) return(h3(paste("REMOVED COMPARISON ", Y), style = "color: #FF6200;", align = "center"))
+                       )
                        
-                       out <- list(
-                         link = h4(a(href=paste0("http://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=",SelectedGSE()), paste(SelectedGSE(), " - ", GSEmeta$title), target = "blank"))
+                       
+                       
+                       
+                       muts <- unlist(strsplit(X$Mut, " "))
+                       wts <- unlist(strsplit(X$WT, " "))
+                       pert <- X$Perturbation
+                       
+                       GSMtitles <- data.frame(do.call(rbind, lapply(GSMmeta, function(XX){return(c(GSM = XX$gsm, Title = XX$title))})))
+                       
+                       muts.titles <- GSMtitles[GSMtitles$GSM%in%muts,]
+                       wts.titles <- GSMtitles[GSMtitles$GSM%in%wts,]
+                       
+                       alloutputs <- list(
+                         hr(style = "height: 10px; border: 0; box-shadow: 0 -10px 5px -10px #8c8b8b inset;")
                          ,
-                         div(style="display:inline-block",
-                             actionButton(paste0("removeGSE_", SelectedGSE()),"REMOVE THIS ENTIRE GSE", icon("remove"), style="color: #fff; background-color: red; border-color: #2e6da4")
+                         div(id="comp_name_box", style="display:inline-block",
+                             if(nchar(names(MPC.l[[SelectedGSE()]])[Y])>20){
+                               h4(renderText(paste0(substr(names(MPC.l[[SelectedGSE()]])[Y], 1, 20), "...")))
+                             } else {
+                               h4(renderText(names(MPC.l[[SelectedGSE()]])[Y]))
+                             }
                          )
                          ,
-                         div(style="display:inline-block",
-                             actionButton("addComp","ADD A COMPARISON", icon("plus"), style="color: #fff; background-color: green; border-color: #2e6da4")
+                         bsTooltip(id = "comp_name_box", title = "The current name assigned to the comparison of samples below. Should identify the experimental condition. e.g. the gene that has been knocked down or disease name.",
+                                   placement = "bottom", trigger = "hover")
+                         ,
+                         div(id ="comp_pert_box", style="display:inline-block",
+                             h3(renderText(pert)) 
                          )
                          ,
-                         summary = renderText(paste(substr(GSEmeta$summary,1,600)," ..."))
+                         bsTooltip(id = "comp_pert_box", title = "The current direction assigned to the comparison of samples below. Identifies whether the experimental condition represents the addition or subtraction of a perturbation agent or disease state.",
+                                   placement = "bottom", trigger = "hover")
                          ,
-                         matches = matchoutputs
+                         
+                         div(id="rename_comp_textbox", style="display:inline-block",
+                             textInput(paste0("namebox_", SelectedGSE(), "_", Y), "Rename", width=100)
+                         )
+                         ,
+                         bsTooltip(id = "rename_comp_textbox", title = "Rename the comparison here.",
+                                   placement = "bottom", trigger = "hover")
+                         ,
+                         div(id="rename_comp_button", style="display:inline-block",
+                             actionButton(paste0("rename_", SelectedGSE(), "_", Y),"", icon("pencil"), style="color: #000; background-color: #94F4FF; border-color: #000000")
+                         )
+                         ,
+                         bsTooltip(id = "rename_comp_button", title = "Confirm renaming of this comparison.",
+                                   placement = "bottom", trigger = "hover")
+                         ,
+                         div(id="comp_direction", style="display:inline-block",
+                             selectInput(paste0("perturbation_", SelectedGSE(), "_", Y), "+ or -", choices = c("+","-"), selected = pert, width = 100)
+                         )
+                         ,
+                         bsTooltip(id = "comp_direction", title = "Select whether the perturbation agent is present (+) or absent (-). e.g. disease state (+) / gene knockdown (-).",
+                                   placement = "bottom", trigger = "hover")
+                         ,
+                         h4(renderText("\nPerturbation samples"))
+                         ,
+                         Mutants <- DT::renderDataTable(as.data.frame(muts.titles), options = list(dom = 't'))
+                         ,
+                         br()
+                         ,
+                         h4(renderText("\nControl samples"))
+                         ,
+                         Wilds = DT::renderDataTable(as.data.frame(wts.titles), options = list(dom = 't'))
+                         ,
+                         div(id = "remove_comparison_button",
+                             actionButton(paste0("remove_", SelectedGSE(), "_", Y),"REMOVE THIS COMPARISON", icon("remove"), style="color: #fff; background-color: #ff6b30; border-color: #2e6da4")
+                         )
+                         ,
+                         bsTooltip(id = "remove_comparison_button", title = "Remove the above comparison from this GSE.",
+                                   placement = "bottom", trigger = "hover")
+                         ,
+                         
+                         hr(style = "height: 10px; border: 0; box-shadow: 0 10px 20px -10px #8c8b8b inset;")
                        )
                      })
-        
-        
-        return(out)
-        
-      })
+                     
+                     out <- list(
+                       link = h4(a(href=paste0("http://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=",SelectedGSE()), paste(SelectedGSE(), " - ", GSEmeta$title), target = "blank"))
+                       ,
+                       div(id="remove_GSE_button", style="display:inline-block",
+                           actionButton(paste0("removeGSE_", SelectedGSE()),"REMOVE THIS ENTIRE GSE", icon("remove"), style="color: #fff; background-color: red; border-color: #2e6da4")
+                       )
+                       ,
+                       bsTooltip(id = "remove_GSE_button", title = "Remove this GSE from the analysis.",
+                                 placement = "bottom", trigger = "hover")
+                       ,
+                       div(id = "add_comparison_button", style="display:inline-block",
+                           actionButton("addComp","ADD A COMPARISON", icon("plus"), style="color: #fff; background-color: green; border-color: #2e6da4")
+                       )
+                       ,
+                       bsTooltip(id = "add_comparison_button", title = "Add a new / custom comparison of samples to this GSE.",
+                                 placement = "bottom", trigger = "hover")
+                       ,
+                       summary = renderText(paste(substr(GSEmeta$summary,1,600)," ..."))
+                       ,
+                       matches = matchoutputs
+                     )
+                   })
       
       
-      ###########################################################
+      return(out)
       
+    })
+    
+    
+    ###########################################################
+    
+    
+    output$MutantTable <- DT::renderDataTable({
+      req(SelectedGSE())
       
-      output$MutantTable <- DT::renderDataTable({
-        req(SelectedGSE())
-        
-        GSEmeta <- AllGSEmetadata()[[SelectedGSE()]]
-        GSMmeta <- GSEmeta$GSMMeta
-        GSMlist <- grabGSMids(SelectedGSE())
-        
-        MutantTable <- data.frame(Sample = GSMlist, Title = do.call(rbind, GSMmeta)[,2])
-        
-        DT::datatable(MutantTable)
-        
-      })
+      GSEmeta <- AllGSEmetadata()[[SelectedGSE()]]
+      GSMmeta <- GSEmeta$GSMMeta
+      GSMlist <- grabGSMids(SelectedGSE())
       
-      output$ControlTable <- DT::renderDataTable({
-        req(SelectedGSE())
-        
-        GSEmeta <- AllGSEmetadata()[[SelectedGSE()]]
-        GSMmeta <- GSEmeta$GSMMeta
-        GSMlist <- grabGSMids(SelectedGSE())
-        
-        ControlTable <- data.frame(Sample = GSMlist, Title = do.call(rbind, GSMmeta)[,2])
-        
-        DT::datatable(ControlTable)
-        
-      })
+      MutantTable <- data.frame(Sample = GSMlist, Title = do.call(rbind, GSMmeta)[,2])
       
-      output$addComp <- renderUI({
-        req(SelectedGSE())
-        
-        GSEmeta <- AllGSEmetadata()[[SelectedGSE()]]
-        GSMmeta <- GSEmeta$GSMMeta
-        
-        out <- list(
-          link = h4(a(href=paste0("http://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=",SelectedGSE()), paste(SelectedGSE(), " - ", GSEmeta$title), target = "blank"))
-          ,
-          message2 = h4(renderText("Create a new comparison here for the current GSE. Simply select those samples you want to designate as Mutants and Controls in the tables below. Make sure you have entered the name of the molecule / perturbation in the text box and selected the direction of perturbation. Then click 'ADD' at the bottom of the page."))
-          ,
-          hr()
-          ,
-          div(style="display:inline-block",
-              textInput("addnamebox", "Perturbed Molecule", value = "New Comparison", width=200)
-          )
-          ,
-          div(style="display:inline-block",
-              selectInput("addperturbation", "+ or -", choices = c("+","-"), selected = "+", width = 100)
-          )
-          ,
-          
-          message3 = h3(renderText("Select Perturbation samples:")),
-          DT::dataTableOutput('MutantTable'),
-          hr(),
-          message3 = h3(renderText("Select Control samples:")),
-          DT::dataTableOutput('ControlTable'),
-          hr(),
-          actionButton("finishAdd","ADD THIS COMPARISON", icon("addition"), style="color: #fff; background-color: green; border-color: #2e6da4")
-          ,
-          actionButton("cancelAdd","CANCEL", icon("step-backward"), style="color: #fff; background-color: red; border-color: #2e6da4")
-          
+      DT::datatable(MutantTable)
+      
+    })
+    
+    output$ControlTable <- DT::renderDataTable({
+      req(SelectedGSE())
+      
+      GSEmeta <- AllGSEmetadata()[[SelectedGSE()]]
+      GSMmeta <- GSEmeta$GSMMeta
+      GSMlist <- grabGSMids(SelectedGSE())
+      
+      ControlTable <- data.frame(Sample = GSMlist, Title = do.call(rbind, GSMmeta)[,2])
+      
+      DT::datatable(ControlTable)
+      
+    })
+    
+    output$addComp <- renderUI({
+      req(SelectedGSE())
+      
+      GSEmeta <- AllGSEmetadata()[[SelectedGSE()]]
+      GSMmeta <- GSEmeta$GSMMeta
+      
+      out <- list(
+        link = h4(a(href=paste0("http://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=",SelectedGSE()), paste(SelectedGSE(), " - ", GSEmeta$title), target = "blank"))
+        ,
+        message2 = h4(renderText("Create a new comparison here for the current GSE. Simply select those samples you want to designate as Mutants and Controls in the tables below. Make sure you have entered the name of the molecule / perturbation in the text box and selected the direction of perturbation. Then click 'ADD' at the bottom of the page."))
+        ,
+        hr()
+        ,
+        div(id="add_new_name_box", style="display:inline-block",
+            textInput("addnamebox", "Comparison Name", value = "New Comparison", width=200)
         )
+        ,
+        bsTooltip(id = "add_new_name_box", title = "Name the comparison of samples below. Should identify the experimental condition. e.g. the gene that has been knocked down or disease name.",                  placement = "bottom", trigger = "hover")
+        ,
+        div(style="display:inline-block",
+            selectInput("addperturbation", "+ or -", choices = c("+","-"), selected = "+", width = 100)
+        )
+        ,
+        bsTooltip(id = "addperturbation", title = "Select whether the experimental condition is present (+) or absent (-). e.g. disease state (+) / gene knockdown (-).",          placement = "bottom", trigger = "hover")
+        ,
         
+        message3 = h3(renderText("Select Perturbation samples:")),
+        DT::dataTableOutput('MutantTable'),
+
+        bsTooltip(id = "MutantTable", title = "Select the samples which represent the perturbation. e.g. gene knock down or disease state", placement = "bottom", trigger = "hover")
+        ,
+        hr(),
+        message3 = h3(renderText("Select Control samples:")),
+        DT::dataTableOutput('ControlTable'),
+        bsTooltip(id = "ControlTable", title = "Select the samples which represent the control. e.g. normal samples or healthy patients", placement = "bottom", trigger = "hover")
+        ,
+        hr(),
+        actionButton("finishAdd","ADD THIS COMPARISON", icon("addition"), style="color: #fff; background-color: green; border-color: #2e6da4")
+        ,
+        bsTooltip(id = "finishAdd", title = "Confirm and add the above comparison to the GSE", placement = "bottom", trigger = "hover")
+        ,
+        actionButton("cancelAdd","CANCEL", icon("step-backward"), style="color: #fff; background-color: red; border-color: #2e6da4")
         
-        
-        
-        
-        return(out)
-        
-      })
-      
-      #addition observer
-      observeEvent(
-        {input$finishAdd},{
-          GSEmeta <- AllGSEmetadata()[[SelectedGSE()]]
-          GSMmeta <- GSEmeta$GSMMeta
-          GSMTable <- do.call(rbind, GSMmeta)[,1:2]
-          
-          GSMids <- grabGSMids(SelectedGSE())
-          
-          tmpPair <- list(Mut = paste(GSMids[input$MutantTable_rows_selected], sep= " "), WT = paste(GSMids[input$ControlTable_rows_selected], sep= " "), Confidence = "High", NameConfidence = "High", Perturbation = input$addperturbation)
-          
-          FMPC2$mpairs[[SelectedGSE()]][[length(FMPC2$mpairs[[SelectedGSE()]])+1]] <- tmpPair
-          names(FMPC2$mpairs[[SelectedGSE()]])[length(FMPC2$mpairs[[SelectedGSE()]])] <- input$addnamebox
-          
-          
-          CurTab$Tab = "Verify"
-          
-        }, ignoreNULL = TRUE, autoDestroy = TRUE, priority = 1)
-      
-      
-      observeEvent(
-        {input$cancelAdd},{
-          
-          CurTab$Tab = "Verify"
-          
-        }, ignoreNULL = TRUE, autoDestroy = TRUE, priority = 1)
+      )
       
       
-      ##############################################################################################################################
-      ### start observerS
       
       
-      removeMP.observers <- list()
-      removeGSE.observers <- list()
-      renameMP.observers <- list()
-      pertMP.observers <- list()
       
+      return(out)
       
-      aco <- observeEvent(
-        {input[["addComp"]]},{
-          
-          CurTab$Tab = "Add"
-          
-        }, ignoreNULL = TRUE, autoDestroy = TRUE, priority = 1)
-      
-      
-      obsr2 <- observe({
+    })
+    
+    #addition observer
+    observeEvent(
+      {input$finishAdd},{
+        GSEmeta <- AllGSEmetadata()[[SelectedGSE()]]
+        GSMmeta <- GSEmeta$GSMMeta
+        GSMTable <- do.call(rbind, GSMmeta)[,1:2]
+        
+        GSMids <- grabGSMids(SelectedGSE())
+        
+        tmpPair <- list(Mut = paste(GSMids[input$MutantTable_rows_selected], sep= " "), WT = paste(GSMids[input$ControlTable_rows_selected], sep= " "), Confidence = "High", NameConfidence = "High", Perturbation = input$addperturbation)
+        
+        FMPC2$mpairs[[SelectedGSE()]][[length(FMPC2$mpairs[[SelectedGSE()]])+1]] <- tmpPair
+        names(FMPC2$mpairs[[SelectedGSE()]])[length(FMPC2$mpairs[[SelectedGSE()]])] <- input$addnamebox
         
         
-        if(length(renameMP.observers) > 0){
-          
-          
-          renameMP.observers <<- lapply(renameMP.observers, function(X){ X$destroy() })
-          removeMP.observers <<- lapply(removeMP.observers, function(X){ X$destroy() })
-          removeGSE.observers <<- lapply(removeGSE.observers, function(X){ X$destroy() })
-          pertMP.observers <<- lapply(pertMP.observers, function(X){ X$destroy() })
-          
-        }
+        CurTab$Tab = "Verify"
         
+      }, ignoreNULL = TRUE, autoDestroy = TRUE, priority = 1)
+    
+    
+    observeEvent(
+      {input$cancelAdd},{
         
-        removeGSE.observers <<- lapply(names(input)[grepl(paste0("removeGSE_",SelectedGSE()), names(input))], function(x) {
-          
-          
-          observeEvent(
-            {input[[x]]},{
-              FMPC2$mpairs[[SelectedGSE()]] <<- NULL
-              
-              if(length(renameMP.observers) > 0){
-                
-                renameMP.observers <<- lapply(renameMP.observers, function(X){ X$destroy() })
-                renameMP.observers <<- list()
-                removeMP.observers <<- lapply(removeMP.observers, function(X){ X$destroy() })
-                removeMP.observers <<- list()
-                pertMP.observers <<- lapply(pertMP.observers, function(X){ X$destroy() })
-                pertMP.observers <<- list()
-              }
-              
-            }, ignoreNULL = TRUE, autoDestroy = TRUE, priority = 1)
-          
-        })
+        CurTab$Tab = "Verify"
         
-        removeMP.observers <<- lapply(names(input)[grepl(paste0("remove_",SelectedGSE()), names(input))], function(x) {
-          
-          
-          observeEvent(
-            {input[[x]]},{
-              
-              to.rem <- as.numeric(gsub(paste0("remove_",SelectedGSE(),"_"),"",x))
-              suppressWarnings(if(!is.na(FMPC2$mpairs[[SelectedGSE()]][[to.rem]])) {
-                FMPC2$mpairs[[SelectedGSE()]][[to.rem]] <<- NA
-              })
-            }, ignoreNULL = TRUE, autoDestroy = TRUE)
-          
-          
-        })
-        
-        
-        renameMP.observers <<- lapply(names(input)[grepl(paste0("rename_",SelectedGSE()), names(input))], function(x) {
-          
-          observeEvent(
-            {input[[x]]},{
-              
-              to.ren <- as.numeric(gsub(paste0("rename_",SelectedGSE(),"_"),"",x))
-              suppressWarnings(if(!is.na(FMPC2$mpairs[[SelectedGSE()]][[to.ren]])) {
-                names(FMPC2$mpairs[[SelectedGSE()]])[to.ren] <<- input[[paste0("namebox_",SelectedGSE(),"_", to.ren)]]
-              }) 
-            }, ignoreNULL = TRUE, autoDestroy = TRUE)
-          
-        })
-        
-        
-        pertMP.observers <<- lapply(names(input)[grepl(paste0("perturbation_",SelectedGSE()), names(input))], function(x) {
-          observeEvent(
-            {input[[x]]},{
-              to.ren <- as.numeric(gsub(paste0("perturbation_",SelectedGSE(),"_"),"",x))
-              suppressWarnings(if(!is.na(FMPC2$mpairs[[SelectedGSE()]][[to.ren]])) {
-                if(!FMPC2$mpairs[[SelectedGSE()]][[to.ren]]["Perturbation"] == input[[paste0("perturbation_",SelectedGSE(),"_", to.ren)]]){
-                  
-                  FMPC2$mpairs[[SelectedGSE()]][[to.ren]]["Perturbation"] <<- input[[paste0("perturbation_",SelectedGSE(),"_", to.ren)]]
-                }
-              })
-            }, ignoreNULL = TRUE, autoDestroy = TRUE)
-          
-        })
-        
-        
-        checkedGSEs <<- unique(append(checkedGSEs, SelectedGSE()))
-        
-        if(SelectedGSE()%in%rownames(processedGSEsDF())){
-          pages$page <<- floor(which(rownames(processedGSEsDF()) == SelectedGSE()) / default.page.length)
-        }
-        
-        
-      }, autoDestroy = T, priority = -1)
-      
-    })       
+      }, ignoreNULL = TRUE, autoDestroy = TRUE, priority = 1)
     
     
     ##############################################################################################################################
-    ### end observerS
+    ### start observerS
+    
+    
+    removeMP.observers <- list()
+    removeGSE.observers <- list()
+    renameMP.observers <- list()
+    pertMP.observers <- list()
+    
+    
+    aco <- observeEvent(
+      {input[["addComp"]]},{
+        
+        CurTab$Tab = "Add"
+        
+      }, ignoreNULL = TRUE, autoDestroy = TRUE, priority = 1)
+    
+    
+    obsr2 <- observe({
+      
+      
+      if(length(renameMP.observers) > 0){
+        
+        
+        renameMP.observers <<- lapply(renameMP.observers, function(X){ X$destroy() })
+        removeMP.observers <<- lapply(removeMP.observers, function(X){ X$destroy() })
+        removeGSE.observers <<- lapply(removeGSE.observers, function(X){ X$destroy() })
+        pertMP.observers <<- lapply(pertMP.observers, function(X){ X$destroy() })
+        
+      }
+      
+      
+      removeGSE.observers <<- lapply(names(input)[grepl(paste0("removeGSE_",SelectedGSE()), names(input))], function(x) {
+        
+        
+        observeEvent(
+          {input[[x]]},{
+            FMPC2$mpairs[[SelectedGSE()]] <<- NULL
+            
+            if(length(renameMP.observers) > 0){
+              
+              renameMP.observers <<- lapply(renameMP.observers, function(X){ X$destroy() })
+              renameMP.observers <<- list()
+              removeMP.observers <<- lapply(removeMP.observers, function(X){ X$destroy() })
+              removeMP.observers <<- list()
+              pertMP.observers <<- lapply(pertMP.observers, function(X){ X$destroy() })
+              pertMP.observers <<- list()
+            }
+            
+          }, ignoreNULL = TRUE, autoDestroy = TRUE, priority = 1)
+        
+      })
+      
+      removeMP.observers <<- lapply(names(input)[grepl(paste0("remove_",SelectedGSE()), names(input))], function(x) {
+        
+        
+        observeEvent(
+          {input[[x]]},{
+            
+            to.rem <- as.numeric(gsub(paste0("remove_",SelectedGSE(),"_"),"",x))
+            suppressWarnings(if(!is.na(FMPC2$mpairs[[SelectedGSE()]][[to.rem]])) {
+              FMPC2$mpairs[[SelectedGSE()]][[to.rem]] <<- NA
+            })
+          }, ignoreNULL = TRUE, autoDestroy = TRUE)
+        
+        
+      })
+      
+      
+      renameMP.observers <<- lapply(names(input)[grepl(paste0("rename_",SelectedGSE()), names(input))], function(x) {
+        
+        observeEvent(
+          {input[[x]]},{
+            
+            to.ren <- as.numeric(gsub(paste0("rename_",SelectedGSE(),"_"),"",x))
+            suppressWarnings(if(!is.na(FMPC2$mpairs[[SelectedGSE()]][[to.ren]])) {
+              names(FMPC2$mpairs[[SelectedGSE()]])[to.ren] <<- input[[paste0("namebox_",SelectedGSE(),"_", to.ren)]]
+            }) 
+          }, ignoreNULL = TRUE, autoDestroy = TRUE)
+        
+      })
+      
+      
+      pertMP.observers <<- lapply(names(input)[grepl(paste0("perturbation_",SelectedGSE()), names(input))], function(x) {
+        observeEvent(
+          {input[[x]]},{
+            to.ren <- as.numeric(gsub(paste0("perturbation_",SelectedGSE(),"_"),"",x))
+            suppressWarnings(if(!is.na(FMPC2$mpairs[[SelectedGSE()]][[to.ren]])) {
+              if(!FMPC2$mpairs[[SelectedGSE()]][[to.ren]]["Perturbation"] == input[[paste0("perturbation_",SelectedGSE(),"_", to.ren)]]){
+                
+                FMPC2$mpairs[[SelectedGSE()]][[to.ren]]["Perturbation"] <<- input[[paste0("perturbation_",SelectedGSE(),"_", to.ren)]]
+              }
+            })
+          }, ignoreNULL = TRUE, autoDestroy = TRUE)
+        
+      })
+      
+      
+      checkedGSEs <<- unique(append(checkedGSEs, SelectedGSE()))
+      
+      if(SelectedGSE()%in%rownames(processedGSEsDF())){
+        pages$page <<- floor(which(rownames(processedGSEsDF()) == SelectedGSE()) / default.page.length)
+      }
+      
+      
+    }, autoDestroy = T, priority = -1)
+    
+    #})       
+    
+    
+    ##############################################################################################################################
+    ### end sub observerS
     
     
     ###########################################################
@@ -1948,21 +2481,37 @@ shinyServer(function(input, output, session) {
       withProgress(message = "Working:",
                    detail = "Take a break...", value = 0, {
                      
+                     ## remove NAs
                      MPC.g <- lapply(FMPC2$mpairs, function(X){return(X[which(!is.na(X))])})
-                     MPC.g.f <- MPC.g[unlist(lapply(MPC.g, length)) > 0]
+                     
+                     ## remove comparisons with <2 replicates in either class as these will fail differential expression
+                     MPC.g.l2 <- lapply(MPC.g, function(X){
+                       
+                       Muts.AL.2 <- unlist(lapply(X, function(G){ return(length(unlist(strsplit(G$Mut, " "))))})) > 1
+                       WT.AL.2 <- unlist(lapply(X, function(G){ return(length(unlist(strsplit(G$WT, " "))))})) > 1
+                       
+                       return(X[Muts.AL.2 & WT.AL.2])})
+                     
+                     #                     MPC.g.f <- MPC.g[unlist(lapply(MPC.g, length)) > 0]
+                     
+                     ## remove GSEs with nothing left after previous removal steps
+                     MPC.g.f <- MPC.g.l2[unlist(lapply(MPC.g, length)) > 0]
                      req(MPC.g.f)
                      
                      ProcessedData <- suppressWarnings(lapply(names(MPC.g.f), function(X){ 
                        #progress feedback
-                       incProgress(1/length(MPC.g.f), detail = paste0("Processing ", X))
-                       print(paste0("Processing ", X))
+                       incProgress(1/length(MPC.g.f), detail = paste0("Processing: ", X))
+                       print(paste0("Processing: ", X))
                        
                        res <- tryCatch(get.GSE.top.tables(X, MPC.g.f[[X]], AllGSEmetadata()[[X]]), error=function(e) NA)
+                       
                        if(!is.na(res)){
                          names(res$topTables) <- names(MPC.g.f[[X]])
-                         names(res$filenames) <- names(MPC.g.f[[X]])
+                         #names(res$filenames) <- names(MPC.g.f[[X]])
                        }
                        return(res)
+                       
+                       
                      }))
                      names(ProcessedData) <- names(MPC.g.f)
                    })  
@@ -1970,9 +2519,11 @@ shinyServer(function(input, output, session) {
       errors <- is.na(ProcessedData)
       ProcessedData <- ProcessedData[!errors]
       
+      
       withProgress(message = "Writing results to disk...",
                    detail = "This may take a while...", value = 0.5, {
-                     lapply(names(ProcessedData), function(X){ writeTopTables(X, ProcessedData[[X]]$topTables, input$folder) })
+                     lapply(names(ProcessedData), function(X){ writeTopTables(X, ProcessedData[[X]]$topTables, ProcessedData[[X]]$comparisons, input$folder) })
+                     lapply(names(ProcessedData), function(X){ writeComps(X, ProcessedData[[X]]$comparisons, ProcessedData[[X]]$topTables, input$folder) })
                    })
       
       
@@ -1990,11 +2541,10 @@ shinyServer(function(input, output, session) {
                        sub.edges <- lapply(names(ProcessedData[[X]]$topTables), function(Y){
                          tmptable <- ProcessedData[[X]]$topTables[[Y]]
                          
-                         ### this needs to be fixed
+                         ### this needs to be revisited
                          pert = MPC.g.f[[X]][[Y]][["Perturbation"]]
                          
-                         
-                         include <- tmptable$adj.P.Val < 0.05 & abs(tmptable$logFC) > 1
+                         include <- tmptable$adj.P.Val < as.numeric(input$pval) & abs(tmptable$logFC) > as.numeric(input$logfc)
                          print(paste0(sum(na.omit(include)), " edges from ", X))
                          if(sum(na.omit(include)) == 0){
                            return(NA)
@@ -2028,21 +2578,33 @@ shinyServer(function(input, output, session) {
                      ####################
                      
                      
-                     
                      names(edges) <- names(ProcessedData)
                      
                      
-                     all.edges <- unique(do.call(rbind, edges[ unlist(lapply(edges, function(X){return(sum(!is.na(X)) > 0 )})) ] ))     
+                     all.edges <- data.frame(Regulator = "Empty",	Target = "Empty",	Perturbation = "Empty",	Effect = "Empty",	Source = "Empty",	edgetype = "Empty")
+                     combined.edges <- unique(do.call(rbind, edges[ unlist(lapply(edges, function(X){return(sum(!is.na(X)) > 0 )})) ] ))     
                      
+                     if(!is.null(combined.edges)){
+                       all.edges <- combined.edges
+                     }
+                     
+                     if(!file.exists(paste(getwd(),"/",outFolder,sep = ""))){
+                       dir.create(paste(getwd(),"/",outFolder,sep = ""))
+                     }
+                     
+                     if(!file.exists(paste(getwd(),"/",outFolder,"/", input$folder,sep = ""))){
+                       dir.create(paste(getwd(),"/",outFolder,"/", input$folder,sep = ""))
+                     }
                      
                      write.table(na.omit(all.edges), paste0(outFolder,"/",input$folder,"/","AllEdges.txt"), sep="\t", col.names = T, row.names = F, quote=FALSE)
+                     #write.table("aaa", paste0(outFolder,"/",input$folder,"/","AllEdges.txt"), sep="\t", col.names = T, row.names = F, quote=FALSE)
                      
                      
                      
                    })
       
       ##### download data
-
+      
       
       output$downloadData <- downloadHandler(
         filename = paste0(input$folder, ".zip"),
@@ -2064,53 +2626,79 @@ shinyServer(function(input, output, session) {
       withProgress(message = "Plotting Graph...",
                    detail = "This may take a while, especially for large networks...", value = 0.5, {
                      
-                     
-                     gseids <- names(edges)
+                     if(length(edges) > 0){
+                       gseids <- names(edges)
+                     } else {
+                       gseids <- NA
+                     }
                      
                      sigedgesdf <- data.frame(GSE = gseids, UpReg = 0, DownReg = 0)
-                     split.all.edges <- split(all.edges, all.edges$Source)
                      
-                     lapply(names(split.all.edges), function(X){ 
+                     if(!is.null(all.edges)){
                        
-                       typecounts <- table(split.all.edges[[X]]$edgetype)
+                       split.all.edges <- split(all.edges, all.edges$Source)
                        
-                       if(!is.na(typecounts['Act'])) {
-                         sigedgesdf[sigedgesdf$GSE == X, "UpReg"] <<- typecounts["Act"]
+                       lapply(names(split.all.edges), function(X){ 
+                         
+                         typecounts <- table(split.all.edges[[X]]$edgetype)
+                         
+                         if(!is.na(typecounts['Act'])) {
+                           sigedgesdf[sigedgesdf$GSE == X, "UpReg"] <<- typecounts["Act"]
+                         }
+                         
+                         if(!is.na(typecounts['Inh'])) {
+                           sigedgesdf[sigedgesdf$GSE == X, "DownReg"] <<- typecounts["Inh"]
+                         }
+                         
+                         return(TRUE)  
+                       })
+                       
+                       
+                       if(nrow(na.omit(all.edges)) > 0 ){
+                         
+                         out <- list(
+                           
+                           message2 = h3(renderText("Processing is finished and the results are ready for download! Click the 'Download Results' button.\n\n Below you can see the number of significantly differentially expressed genes from each GSE using standard thresholds.")),
+                           
+                           message5 = downloadButton("downloadData", label = "Download Results"),
+                           
+                           message4 = renderTable(sigedgesdf),
+                           
+                           #                           message6 = p(HTML("<A HREF=\"javascript:history.go(0)\">Please restart GEOracle to perform another analysis.</A>"))
+                           #message6 = p(HTML("<A HREF=\"javascript:close_window()\">Please restart GEOracle to perform another analysis.</A>"))
+                           
+                           
+                           message6 = actionButton("close_app", label = "Close GEOracle")#, onclick= "setTimeout(function(){window.close();},500);")
+                         )
+                         
+                         
+                         
+                       } else {
+                         out <- list(
+                           message2 = h3(renderText("Processing is finished and the results are ready for download! Click the 'Download Results' button.\n\n Unfortunately we couldn't detect any significantly differentially expressed genes from each GSE using standard thresholds.")),
+                           
+                           message5 = downloadButton("downloadData", label = "Download Results"),
+                           
+                           message6 = p(HTML("<A HREF=\"javascript:history.go(0)\">Please restart GEOracle to perform another analysis.</A>"))
+                           
+                           
+                         )
+                         
                        }
-                       
-                       if(!is.na(typecounts['Inh'])) {
-                         sigedgesdf[sigedgesdf$GSE == X, "DownReg"] <<- typecounts["Inh"]
-                       }
-                       
-                       return(TRUE)  
-                     })
-        
-                     
-                     if(nrow(na.omit(all.edges)) > 0 ){
-
-                       out <- list(
-                         
-                         message2 = h3(renderText("Processing is finished and the results are ready for download! Click the 'Download Results' button.\n\n Below you can see the number of significantly differentially expressed genes from each GSE using standard thresholds.")),
-                         
-                         message5 = downloadButton("downloadData", label = "Download Results"),
-                         
-                         message4 = renderTable(sigedgesdf),
-
-                         message6 = p(HTML("<A HREF=\"javascript:history.go(0)\">Please restart GEOracle to perform another analysis.</A>"))
-                         
-                       )
-                       
                        
                        
                      } else {
+                       
                        out <- list(
-                         message2 = h3(renderText("Couldn't find any significant D.E. genes!"))
                          
+                         message2 = h3(renderText("Processing is finished and the results are ready for download! Click the 'Download Results' button.\n\n Unfortunately we couldn't detect any significantly differentially expressed genes from each GSE using standard thresholds.")),
+                         
+                         message5 = downloadButton("downloadData", label = "Download Results"),
+                         
+                         message6 = p(HTML("<A HREF=\"javascript:history.go(0)\">Please restart GEOracle to perform another analysis.</A>"))
                          
                        )
-                       
                      }
-                     
                      
                      
                    })
@@ -2143,14 +2731,10 @@ shinyServer(function(input, output, session) {
     CurTab$Tab = "Verify"  
   })
   
-  
-  
-  observeEvent(input$process, {
-    
+  observeEvent(input$close_app, {
+    js$closeWindow()
+    stopApp()
   })
-  
-  
-  
   
 })
 
