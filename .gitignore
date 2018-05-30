@@ -1,1 +1,5 @@
  
+*.sqlite
+*.Rproj
+*.Rhistory
+.Rproj.user*

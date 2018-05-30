@@ -1,0 +1,19 @@
+Package: Georacle
+Type: Package
+Title: Georacle Shiny app 
+Version: 0.99.0
+Authors@R: person ("Djordje", "Djordjevic", email="d.Djordjevic@victorchang.edu.au", 
+      role = c("aut","cre"))
+Description: Georacle.
+biocViews: GEO
+License: file LICENSE
+Encoding: UTF-8
+LazyData: true
+Depends: R (>= 3.3.0)
+Imports: data.table (>= 1.9.4), shiny, shinyFiles, plyr, e1071, rockchalk, limma, RCurl,
+          Biobase, GEOquery, biomaRt, RSQLite, RMySQL, GEOmetadb, DT, memisc, igraph, shinyBS,
+          shinyjs
+RoxygenNote: 6.0.1
+Suggests: knitr,
+    rmarkdown
+VignetteBuilder: knitr

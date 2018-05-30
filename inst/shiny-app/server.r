@@ -6,7 +6,8 @@
 this.dir <- dirname(rstudioapi::getActiveDocumentContext()$path)
 #this.dir <- choose.dir(caption = "Please select the GEOracle folder")
 #this.dir <- "/home/rstudio/ShinyApps/GEOracle_AWS"
-setwd(this.dir)
+#browser()
+#setwd(this.dir)
 
 list.of.cran.packages <- c("cluster", "plyr", "e1071", "rockchalk", "RCurl", "shiny", "DT", "memisc", "igraph", "shinyBS","RSQLite","shinyjs","httr")
 new.cran.packages <- list.of.cran.packages[!(list.of.cran.packages %in% installed.packages()[,"Package"])]
@@ -41,14 +42,20 @@ require(igraph) # for graph
 require(shinyBS)
 require(shinyjs)
 
-Features.file <- "Features.txt"
+# Features.file <- "Features.txt"
+extdata_path <- system.file("extdata",package = "Georacle")
+Features.file <- paste(extdata_path,"Features.txt", sep="/")
+
 outFolder <- "GEOracle_output"
 
-load("ClusterLabelModel.RData")
+#load("ClusterLabelModel.RData")
+ClusterLabelModelFile <- paste(extdata_path,"ClusterLabelModel.RData", sep="/")
+browser()
+load(ClusterLabelModelFile)
 
 ##
-load("GSEClassifierData/newFeatsToKeep.RData")
-load("GSEClassifierData/PertModel.RData")
+load(paste(extdata_path,"GSEClassifierData/newFeatsToKeep.RData", sep="/"))
+load(paste(extdata_path,"GSEClassifierData/PertModel.RData",sep="/"))
 
 
 ################################################################################################################################################
@@ -1779,10 +1786,9 @@ shinyServer(function(input, output, session) {
       
       setwd(folderDir)
       
-      fs <- list.files()
+      fs <- list.files(path = folderDir)
       
       zipfile <- zip(zipfile=fname, files=fs)
-      
       setwd(this.dir)
       
       return(zipfile)

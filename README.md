@@ -22,9 +22,15 @@ Installing GEOracle
 #############################
 
     Make sure you have an up to date version of R (3.3+) and the Shiny package installed.
-    Download GEOracle and then unzip it somewhere permanent
-    Open GEOracle.R in RStudio
-    Click 'Run App' in the top right corner of the screen
+    Use the following R commands to install georacle onto your computer:
+    
+    install.packages("devtools")
+    library(devtools)
+    devtools::install_github("VCCRI/Georacle")
+    
+    You can run georacle using the following commands:
+    Georacle::Georacle()
+
 
 
 GEOracle will then attempt to install all neccessary packages and download the full database of metadata from GEO (~5GB of space required). Once complete GEOracle will open as a Shiny app in a web browser or as a new R studio window. The user can then upload a list of GSE IDs and begin the analysis.
