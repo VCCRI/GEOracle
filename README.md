@@ -1,6 +1,4 @@
 # GEOracle: Mining the GEO database for perturbation data sets
-http://georacle.victorchang.edu.au/
-
 
 #############################
  What is GEOracle?
