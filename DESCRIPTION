@@ -9,7 +9,7 @@ biocViews: GEO
 License: file LICENSE
 Encoding: UTF-8
 LazyData: true
-Depends: R (>= 3.3.0)
+Depends: R (>= 3.1.0)
 Imports: data.table (>= 1.9.4), shiny, shinyFiles, plyr, e1071, rockchalk, limma, RCurl,
           Biobase, GEOquery, biomaRt, RSQLite, RMySQL, GEOmetadb, DT, memisc, igraph, shinyBS,
           shinyjs
