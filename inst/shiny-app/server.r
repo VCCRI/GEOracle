@@ -83,10 +83,7 @@ getSQLiteFile<-function (destdir = getwd(), destfile = "GEOmetadb.sqlite.gz")
     else {
         url_geo = url_geo_3
     }
-    print("Here");
-  print("Downloading");
     download.file(url_geo, destfile = localfile, mode = "wb")
-  print("Downloading 2");
     cat("Unzipping...\n")
     gunzip(localfile, overwrite = TRUE)
     unzippedlocalfile <- gsub("[.]gz$", "", localfile)
