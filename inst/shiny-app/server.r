@@ -67,6 +67,7 @@ load(paste(extdata_path,"GSEClassifierData/PertModel.RData",sep="/"))
 ###
 getSQLiteFile<-function (destdir = getwd(), destfile = "GEOmetadb.sqlite.gz") 
 {
+    print("Retriving SQLite file");
     localfile <- file.path(destdir, destfile)
     url_geo_1 = "https://gbnci-abcc.ncifcrf.gov/geo/GEOmetadb.sqlite.gz"
     url_geo_2 = "http://starbuck1.s3.amazonaws.com/sradb/GEOmetadb.sqlite.gz"
@@ -82,7 +83,10 @@ getSQLiteFile<-function (destdir = getwd(), destfile = "GEOmetadb.sqlite.gz")
     else {
         url_geo = url_geo_3
     }
+    print("Here");
+  print("Downloading");
     download.file(url_geo, destfile = localfile, mode = "wb")
+  print("Downloading 2");
     cat("Unzipping...\n")
     gunzip(localfile, overwrite = TRUE)
     unzippedlocalfile <- gsub("[.]gz$", "", localfile)
