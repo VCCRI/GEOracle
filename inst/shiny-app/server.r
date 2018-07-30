@@ -69,8 +69,8 @@ getSQLiteFile<-function (destdir = getwd(), destfile = "GEOmetadb.sqlite.gz")
 {
     print("Retriving SQLite file");
     localfile <- file.path(destdir, destfile)
-    url_geo_1 = "http://gbnci-abcc.ncifcrf.gov/geo/GEOmetadb.sqlite.gz"
-    url_geo_2 = "http://starbuck1.s3.amazonaws.com/sradb/GEOmetadb.sqlite.gz"
+    url_geo_1 = "http://starbuck1.s3.amazonaws.com/sradb/GEOmetadb.sqlite.gz"
+    url_geo_2 = "http://gbnci-abcc.ncifcrf.gov/geo/GEOmetadb.sqlite.gz"
     url_geo_3 = "http://watson.nci.nih.gov/~zhujack/GEOmetadb.sqlite.gz"
     if (!inherits(try(url(url_geo_1, open = "rb"), silent = TRUE), 
         "try-error")) {
