@@ -50,7 +50,7 @@ outFolder <- "GEOracle_output"
 
 #load("ClusterLabelModel.RData")
 ClusterLabelModelFile <- paste(extdata_path,"ClusterLabelModel.RData", sep="/")
-browser()
+#browser()
 load(ClusterLabelModelFile)
 
 ##
