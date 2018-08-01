@@ -3,7 +3,8 @@
 ################################################################################################################################################
 
 #this.dir <- dirname(parent.frame(2)$ofile)
-this.dir <- dirname(rstudioapi::getActiveDocumentContext()$path)
+#this.dir <- dirname(rstudioapi::getActiveDocumentContext()$path)
+this.dir <- getwd()
 #this.dir <- choose.dir(caption = "Please select the GEOracle folder")
 #this.dir <- "/home/rstudio/ShinyApps/GEOracle_AWS"
 #browser()
