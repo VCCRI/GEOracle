@@ -114,7 +114,7 @@ shinyUI(fluidPage(
                                           #placement = "bottom", trigger = "hover"),
                                           
                                           div(id="species_select_search_div",
-                                              selectInput('selectSpecies', 'Species:', choices = c("A","C"))
+                                              selectInput('selectSpecies', 'Species:', choices = c("A","C"), selectize = FALSE)
                                           )
                                           ,
                                           
@@ -272,9 +272,9 @@ shinyUI(fluidPage(
                      ,
                      h2("Set differential expression significance thresholds:")
                      ,
-                     selectInput("logfc", "Absolute log2 FC", choices = c(0.5,1,2), selected = 1)
+                     selectInput("logfc", "Absolute log2 FC", choices = c(0.5,1,2), selected = 1, selectize = FALSE)
                      ,
-                     selectInput("pval", "B.H. adjusted P-value", choices = c(0.1,0.05,0.01,0.001), selected = 0.05)
+                     selectInput("pval", "B.H. adjusted P-value", choices = c(0.1,0.05,0.01,0.001), selected = 0.05, selectize = FALSE)
                      ,
                      actionButton("process", "Calculate D.E.", icon("object-align-bottom"), style="color: #fff; background-color: rgb(18, 88, 24); border-color: rgb(141, 252, 0)")
     )
