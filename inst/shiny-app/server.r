@@ -7,7 +7,7 @@
 this.dir <- getwd()
 #this.dir <- choose.dir(caption = "Please select the GEOracle folder")
 #this.dir <- "/home/rstudio/ShinyApps/GEOracle_AWS"
-#browser()
+
 #setwd(this.dir)
 
 list.of.cran.packages <- c("cluster", "plyr", "e1071", "rockchalk", "RCurl", "shiny", "DT", "memisc", "igraph", "shinyBS","RSQLite","shinyjs","httr")
@@ -51,7 +51,7 @@ outFolder <- "GEOracle_output"
 
 #load("ClusterLabelModel.RData")
 ClusterLabelModelFile <- paste(extdata_path,"ClusterLabelModel.RData", sep="/")
-#browser()
+
 load(ClusterLabelModelFile)
 
 ##
@@ -809,6 +809,7 @@ get.gpl2 <- function(metadata) {
 get.pair.labels <- function(matchedPair,gSet) {
   #Pull out targets of use 
   
+  
   mutCluster <- unlist(strsplit(matchedPair$Mut," "))
   wtCluster <- unlist(strsplit(matchedPair$WT," "))
   
@@ -922,6 +923,7 @@ get.transform.data <- function(GSEId) {
     }
     
   }else {
+    
     gset <- getGEO(GSEId, GSEMatrix =TRUE, AnnotGPL=T) ## GSE41277 and GSE39553 gets stuck here (needs AnnotGPL= FALSE)
     if (length(gset) > 1) idx <- grep(GPLId, attr(gset, "names")) else idx <- 1 ##
     gset <- gset[[idx]]
@@ -1076,6 +1078,7 @@ assess.confidence <- function(fNames) {
 #Pass in GSEId and all targets files 
 get.GSE.top.tables <- function(GSEId,MatchedPairs,CurGSEmetadata) {
   gset <- get.transform.data(GSEId)
+  
   
   
   #Check if gset exists
@@ -1560,7 +1563,7 @@ shinyServer(function(input, output, session) {
   GSEsToInclude <- reactiveValues(include=1)
   
   output$analysis_select <- renderUI({ 
-    selectInput('analysis_type', 'Experiment type', c("Perturbations","All experiments"), selected = "Perturbations")
+    selectInput('analysis_type', 'Experiment type', c("Perturbations","All experiments"), selected = "Perturbations", selectize = FALSE)
   })
   
   output$GEoracleLogo2 <- output$GEoracleLogo <- renderImage({
@@ -1818,7 +1821,6 @@ shinyServer(function(input, output, session) {
       lapply(names(gses_split), function(S){
         write.table(gses_split[[S]], file=paste0(folderDir, "/", S, ".txt"), sep="\t", col.names = F, row.names = F, quote=F)
       })
-      
       setwd(folderDir)
       
       fs <- list.files(path = folderDir)
@@ -1890,11 +1892,11 @@ shinyServer(function(input, output, session) {
     
     
     output$filter_select <- renderUI({ 
-      selectInput('filter', 'Strictness', c("Perturbations (Default)","All experiments (Loose)", "Custom"), selected = c("Perturbations (Default)","All experiments (Loose)")[(input$analysis_type == "All experiments") + 1])
+      selectInput('filter', 'Strictness', c("Perturbations (Default)","All experiments (Loose)", "Custom"), selected = c("Perturbations (Default)","All experiments (Loose)")[(input$analysis_type == "All experiments") + 1], selectize = FALSE)
     })
     
     output$speciesUI <- renderUI({ 
-      selectInput("species", "Species", names(table(unlist(GSEspecies()))), selected = names(table(unlist(GSEspecies())))[which.max(table(unlist(GSEspecies())))], width = 200)
+      selectInput("species", "Species", names(table(unlist(GSEspecies()))), selected = names(table(unlist(GSEspecies())))[which.max(table(unlist(GSEspecies())))], width = 200, selectize = FALSE)
     })
     
     
@@ -2234,7 +2236,7 @@ shinyServer(function(input, output, session) {
                                    placement = "bottom", trigger = "hover")
                          ,
                          div(id="comp_direction", style="display:inline-block",
-                             selectInput(paste0("perturbation_", SelectedGSE(), "_", Y), "+ or -", choices = c("+","-"), selected = pert, width = 100)
+                             selectInput(paste0("perturbation_", SelectedGSE(), "_", Y), "+ or -", choices = c("+","-"), selected = pert, width = 100, selectize = FALSE)
                          )
                          ,
                          bsTooltip(id = "comp_direction", title = "Select whether the perturbation agent is present (+) or absent (-). e.g. disease state (+) / gene knockdown (-).",
@@ -2340,7 +2342,7 @@ shinyServer(function(input, output, session) {
         bsTooltip(id = "add_new_name_box", title = "Name the comparison of samples below. Should identify the experimental condition. e.g. the gene that has been knocked down or disease name.",                  placement = "bottom", trigger = "hover")
         ,
         div(style="display:inline-block",
-            selectInput("addperturbation", "+ or -", choices = c("+","-"), selected = "+", width = 100)
+            selectInput("addperturbation", "+ or -", choices = c("+","-"), selected = "+", width = 100, selectize = FALSE)
         )
         ,
         bsTooltip(id = "addperturbation", title = "Select whether the experimental condition is present (+) or absent (-). e.g. disease state (+) / gene knockdown (-).",          placement = "bottom", trigger = "hover")
@@ -2487,6 +2489,9 @@ shinyServer(function(input, output, session) {
       pertMP.observers <<- lapply(names(input)[grepl(paste0("perturbation_",SelectedGSE()), names(input))], function(x) {
         observeEvent(
           {input[[x]]},{
+            
+            
+            
             to.ren <- as.numeric(gsub(paste0("perturbation_",SelectedGSE(),"_"),"",x))
             suppressWarnings(if(!is.na(FMPC2$mpairs[[SelectedGSE()]][[to.ren]])) {
               if(!FMPC2$mpairs[[SelectedGSE()]][[to.ren]]["Perturbation"] == input[[paste0("perturbation_",SelectedGSE(),"_", to.ren)]]){
@@ -2696,6 +2701,9 @@ shinyServer(function(input, output, session) {
                        
                        
                        if(nrow(na.omit(all.edges)) > 0 ){
+                         
+                        
+                         
                          
                          out <- list(
                            
